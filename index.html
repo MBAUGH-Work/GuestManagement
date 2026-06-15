@@ -421,20 +421,21 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
    ─────────────────────────────────────────────────────────────────────────────
    EDIT THESE VALUES before deploying:
 
-   ALLOWED_GROUP_ID   – Object ID of the Entra group whose members can use the tool.
-                        Find it in Entra admin centre → Groups → your group → Overview.
-                        Set to '' to disable group enforcement (not recommended).
+   ALLOWED_GROUP_ID      – Object ID of the Entra group whose members can use
+                           the tool. Set to '' to allow all authenticated users.
 
-   SETTINGS_OWNERS    – UPNs of users who can see and edit the Settings tab.
-                        Everyone else sees the tab hidden.
-                        Add your own UPN here.
+   SETTINGS_GROUP_ID     – Object ID of the Entra group whose members can see
+                           and edit the Settings tab (e.g. your IT admins group).
+                           Set to '' to allow all authenticated users to see Settings.
+
+   SETTINGS_OWNERS       – Optional list of individual UPNs who can see Settings,
+                           in addition to SETTINGS_GROUP_ID members.
+                           Leave empty if using SETTINGS_GROUP_ID only.
    ═══════════════════════════════════════════════════════════════════════════════ */
 window.AccessControl = {
-  ALLOWED_GROUP_ID: '3cccb4f9-bbc8-45a4-852d-f0143108b932',           // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-  SETTINGS_OWNERS:  ['mabaugh@oppd.com'             // e.g. 'admin@yourorg.com'
-    // 'admin@yourorg.com',
-    // 'identityadmin@yourorg.com',
-  ],
+  ALLOWED_GROUP_ID:  '3cccb4f9-bbc8-45a4-852d-f0143108b932',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  SETTINGS_GROUP_ID: 'edcabd65-0536-41e7-b3f4-4a406096cd3c',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  SETTINGS_OWNERS:   [],      // e.g. ['admin@yourorg.com']
 };
 
 (() => {
@@ -507,7 +508,7 @@ window.AccessControl = {
   const _tokenInflight = new Map();
 
   const SCOPES = {
-    read:  ['https://graph.microsoft.com/User.Read.All','https://graph.microsoft.com/AuditLog.Read.All','https://graph.microsoft.com/Directory.Read.All','https://graph.microsoft.com/User.Read'],
+    read:  ['https://graph.microsoft.com/User.Read.All','https://graph.microsoft.com/AuditLog.Read.All','https://graph.microsoft.com/Directory.Read.All','https://graph.microsoft.com/User.Read','https://graph.microsoft.com/GroupMember.Read.All'],
     write: ['https://graph.microsoft.com/User.ReadWrite.All','https://graph.microsoft.com/Directory.AccessAsUser.All'],
     spo:   ['https://graph.microsoft.com/Sites.ReadWrite.All'],
   };
@@ -945,11 +946,37 @@ window.AccessControl = {
   }
 
   function applySettingsOwnerRestriction(upn) {
-    const owners = window.AccessControl?.SETTINGS_OWNERS || [];
-    const isOwner = owners.length === 0 || owners.map(o=>o.toLowerCase()).includes((upn||'').toLowerCase());
-    document.getElementById('settingsContent').style.display = isOwner ? '' : 'none';
-    document.getElementById('settingsOwnerNotice').style.display = isOwner ? 'none' : '';
-    Log.info(`Settings access: ${isOwner ? 'owner' : 'restricted'} for ${upn}`);
+    const owners  = window.AccessControl?.SETTINGS_OWNERS  || [];
+    const groupId = window.AccessControl?.SETTINGS_GROUP_ID || '';
+
+    // UPN list check (instant, no API call needed)
+    const upnMatch = owners.length > 0 &&
+      owners.map(o=>o.toLowerCase()).includes((upn||'').toLowerCase());
+
+    if (upnMatch) {
+      // UPN is in the owners list — grant immediately
+      _showSettings(true);
+      return;
+    }
+
+    if (groupId) {
+      // Check group membership via Graph
+      Graph.checkGroupMembership(groupId).then(isMember => {
+        _showSettings(isMember);
+        Log.info(`Settings group check: ${isMember ? 'granted' : 'denied'} for ${upn}`);
+      }).catch(() => _showSettings(false));
+    } else if (owners.length === 0) {
+      // No restrictions configured — show settings to everyone
+      _showSettings(true);
+    } else {
+      // UPN list configured but this user isn't on it
+      _showSettings(false);
+    }
+  }
+
+  function _showSettings(allowed) {
+    document.getElementById('settingsContent').style.display = allowed ? '' : 'none';
+    document.getElementById('settingsOwnerNotice').style.display = allowed ? 'none' : '';
   }
 
   // ── AUTH UI ──────────────────────────────────────────────────────────────────
