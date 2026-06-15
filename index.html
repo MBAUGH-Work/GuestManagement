@@ -169,7 +169,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     </div>
 
     <!-- browse card (shown after sign-in) -->
-    <div class="card hidden" id="browseCard">
+    <div class="card" id="browseCard" style="display:none">
       <h2>Guest users</h2>
       <div class="row">
         <button id="loadGuestsBtn" class="primary-btn">Load all guests</button>
@@ -453,11 +453,11 @@ window.AppConfig = {
   // ── SHAREPOINT DEFAULTS ───────────────────────────────────────────────────────
   // These pre-populate the Settings tab. Users with Settings access can override them.
   // Set SPO_SITE_URL to pre-fill the site — saves the Settings step for most deployments.
-  SPO_SITE_URL:       '',  // e.g. 'https://yourorg.sharepoint.com/sites/ITGovernance'
+  SPO_SITE_URL:       'https://oppd.sharepoint.com/teams/m365-GroupMgmt',
   SPO_EXCLUSION_LIST: 'GuestExclusionList',
   SPO_AUDIT_LIST:     'GuestAuditLog',
   SPO_EXPORT_LIBRARY: 'GuestExports',
-  SPO_ENABLED:        false,  // Set to true to enable SPO integration by default
+  SPO_ENABLED:        true,  // Set to true to enable SPO integration by default
 
 };
 
@@ -1108,7 +1108,7 @@ window.AccessControl = {
     const connectCard = document.getElementById('connectCard');
     connectCard.style.display = signedIn ? 'none' : '';
     // Browse card and nav: visible only when signed in
-    document.getElementById('browseCard').classList.toggle('hidden', !signedIn);
+    document.getElementById('browseCard').style.display = signedIn ? '' : 'none';
     document.getElementById('mainNav').style.display = signedIn ? '' : 'none';
     // Dark toggle: always visible, SPO badge: always visible
   }
