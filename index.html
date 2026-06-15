@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InactiveGuests – find and clean up dormant guest accounts in Entra</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👤</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"
+          onerror="window.__msalLoadFailed=true"></script>
+  <style>
+/* ── TOKENS ─────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:#f6f8fb; --card:#ffffff; --text:#1a2332; --muted:#607089;
+  --border:#e3e8f0; --accent:#0a66c2; --accent-hover:#084a8e;
+  --accent-soft:#e8f1fb; --danger:#c0392b; --warn:#d97706; --ok:#128d4f;
+  --shadow:0 1px 3px rgba(15,30,60,.06),0 4px 14px rgba(15,30,60,.05);
+  --radius:12px;
+}
+[data-theme="dark"] {
+  --bg:#0f1722; --card:#182233; --text:#e6eef9; --muted:#8a9bb5;
+  --border:#243246; --accent:#4b9eff; --accent-hover:#6db0ff;
+  --accent-soft:#1e3553;
+  --shadow:0 1px 3px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+}
+/* ── RESET ───────────────────────────────────────────────────────────────────── */
+*{box-sizing:border-box}html,body{margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+h1,h2,h3{margin-top:0}h1{font-size:18px;margin-bottom:0}h2{font-size:18px}h3{font-size:15px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:4px;font-size:12px}
+/* ── LAYOUT ─────────────────────────────────────────────────────────────────── */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:center;gap:14px}
+.brand .logo{width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#1a8cff);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:1px;box-shadow:var(--shadow)}
+.subtitle{margin:2px 0 0;color:var(--muted);font-size:12px}
+.topbar-actions{display:flex;align-items:center;gap:12px}
+.user-box{display:flex;align-items:center;gap:10px;font-size:13px}
+.tabs{display:flex;gap:4px;padding:0 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.tab{background:none;border:none;padding:12px 18px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab:hover{color:var(--text)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+main{padding:24px;max-width:1400px;margin:0 auto}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);margin-bottom:18px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:12px 0}
+.row.between{justify-content:space-between}
+/* ── BUTTONS ─────────────────────────────────────────────────────────────────── */
+button{font-family:inherit;font-size:13px}
+.primary-btn{background:var(--accent);color:#fff;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:500;transition:background .15s}
+.primary-btn:hover:not(:disabled){background:var(--accent-hover)}.primary-btn:disabled{opacity:.5;cursor:not-allowed}
+.ghost-btn{background:transparent;color:var(--text);border:1px solid var(--border);padding:8px 14px;border-radius:8px;cursor:pointer;transition:background .15s}
+.ghost-btn:hover:not(:disabled){background:var(--bg)}.ghost-btn:disabled{opacity:.5;cursor:not-allowed}
+.danger-btn{background:var(--danger);color:#fff;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:500}
+.danger-btn:hover:not(:disabled){filter:brightness(.9)}.danger-btn:disabled{opacity:.5;cursor:not-allowed}
+.icon-btn{background:transparent;border:1px solid var(--border);width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:14px}
+/* ── INPUTS ─────────────────────────────────────────────────────────────────── */
+input[type="text"],input[type="search"],input[type="number"],input[type="url"],select{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px}
+input[type="search"]{min-width:240px;flex:1;max-width:400px}
+.checkbox{display:flex;align-items:center;gap:6px;cursor:pointer}
+/* ── PROGRESS ────────────────────────────────────────────────────────────────── */
+.progress-box{margin-top:16px;padding:14px;background:var(--accent-soft);border-radius:10px}
+.progress-header,.progress-footer{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+.progress-footer{margin-bottom:0;margin-top:6px}
+.progress-bar{height:8px;background:var(--border);border-radius:4px;overflow:hidden}
+#progressFill{height:100%;background:var(--accent);width:0%;transition:width .2s}
+/* ── TABLE ───────────────────────────────────────────────────────────────────── */
+.table-wrap{margin-top:14px;border:1px solid var(--border);border-radius:10px;overflow:auto;max-height:65vh}
+.data-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.data-table th{position:sticky;top:0;background:var(--bg);text-align:left;padding:10px 12px;font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
+.data-table td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover{background:var(--accent-soft)}
+.data-table.sortable th.sortable-col{cursor:pointer;user-select:none;padding-right:22px;position:sticky;top:0}
+.data-table.sortable th.sortable-col:hover{color:var(--accent)}
+.data-table.sortable th.sortable-col::after{content:'';position:absolute;right:8px;top:50%;width:0;height:0;margin-top:-3px;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:5px solid var(--border);opacity:.6}
+.data-table.sortable th.sortable-col.sort-asc::after{border-bottom:5px solid var(--accent);opacity:1}
+.data-table.sortable th.sortable-col.sort-desc::after{border-bottom:0;border-top:5px solid var(--accent);margin-top:-2px;opacity:1}
+/* ── NOTICES / BADGES ───────────────────────────────────────────────────────── */
+.notice{padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.4;border:1px solid transparent}
+.notice-warn{background:#fff8e6;color:#6a4a00;border-color:#f5d57a}
+.notice-info{background:#e6f0ff;color:#244a8b;border-color:#a8c0eb}
+[data-theme="dark"] .notice-warn{background:#4a3a10;color:#ffd789;border-color:#7a5a18}
+[data-theme="dark"] .notice-info{background:#1f3160;color:#a9c5ff;border-color:#2c4380}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:500}
+.badge.excluded{background:#ffe4e4;color:#991b1b}
+[data-theme="dark"] .badge.excluded{background:#5a2222;color:#ff9b8d}
+/* ── ACTION BAR / RESULTS ───────────────────────────────────────────────────── */
+.action-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px;margin-top:12px;background:var(--bg);border-radius:8px}
+.action-bar .grow{flex:1}
+.action-result-list{list-style:none;margin:12px 0 0;padding:0;font-size:12.5px;max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px}
+.action-result-list li{padding:6px 12px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center}
+.action-result-list li:last-child{border-bottom:none}
+.action-result-list .ok-mark{color:var(--ok);font-weight:700}
+.action-result-list .err-mark{color:var(--danger);font-weight:700}
+.action-result-list .skip-mark{color:var(--warn);font-weight:700}
+/* ── MODAL ───────────────────────────────────────────────────────────────────── */
+.modal{position:fixed;inset:0;z-index:200}
+.modal.hidden{display:none}
+.modal-backdrop{position:absolute;inset:0;background:rgba(15,25,50,.45)}
+.modal-panel{position:relative;margin:5vh auto;background:var(--card);color:var(--text);border-radius:12px;box-shadow:var(--shadow);max-width:720px;width:calc(100% - 32px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.modal-header h3{margin:0;font-size:16px}
+.modal-body{padding:14px 18px;overflow:auto}
+/* ── LOG ─────────────────────────────────────────────────────────────────────── */
+.log-panel{background:#0d1622;color:#c8dcfc;padding:14px;border-radius:8px;max-height:70vh;overflow:auto;font-family:"Cascadia Code",Consolas,Monaco,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
+.log-panel .log-err{color:#ff8a7a}.log-panel .log-warn{color:#ffc56e}
+.log-panel .log-info{color:#c8dcfc}.log-panel .log-dbg{color:#7a90b3}
+/* ── TOAST ───────────────────────────────────────────────────────────────────── */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--text);color:var(--card);padding:12px 18px;border-radius:8px;box-shadow:var(--shadow);z-index:100;max-width:360px}
+/* ── SPO SETTINGS ────────────────────────────────────────────────────────────── */
+.spo-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid var(--border)}
+.spo-status.ok{background:#d6f3e3;color:#128d4f;border-color:#a3dfc0}
+.spo-status.warn{background:#fff8e6;color:#d97706;border-color:#f5d57a}
+.spo-status.off{background:var(--bg);color:var(--muted)}
+[data-theme="dark"] .spo-status.ok{background:#1f4a32;color:#6fe0a3;border-color:#2d6b48}
+[data-theme="dark"] .spo-status.warn{background:#4a3a10;color:#ffc56e;border-color:#7a5a18}
+.excluded-row td{opacity:.65}
+.excluded-row td:first-child::after{content:" 🔒";font-size:11px}
+.muted{color:var(--muted)}.small{font-size:11px}.table-hint{font-size:12px;color:var(--muted);margin:6px 0 0}
+@media(max-width:720px){main{padding:14px}.card{padding:16px}.topbar{padding:12px 14px}.tabs{padding:0 8px;overflow-x:auto}input[type="search"]{min-width:0}.modal-panel{margin:0 auto;width:100%;max-height:100vh;border-radius:0}.data-table{font-size:12px}.data-table th,.data-table td{padding:7px 8px}.table-wrap{max-height:60vh}}
+  </style>
+</head>
+<body>
+
+<!-- ── TOPBAR ──────────────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">IG</div>
+    <div>
+      <h1>InactiveGuests</h1>
+      <p class="subtitle">Find and clean up dormant guest accounts in Entra</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="spoStatusBadge" class="spo-status off" title="SharePoint governance integration">SPO: off</span>
+    <button id="darkToggle" class="icon-btn" title="Toggle dark mode">🌙</button>
+    <div id="userBox" class="user-box hidden">
+      <span id="userName"></span>
+      <button id="signOutBtn" class="ghost-btn">Sign out</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── TABS ────────────────────────────────────────────────────────────────── -->
+<nav class="tabs">
+  <button class="tab active" data-tab="browse">1. Browse guests</button>
+  <button class="tab" data-tab="recycle">2. Recycle bin</button>
+  <button class="tab" data-tab="settings">⚙ Settings</button>
+  <button class="tab" data-tab="debug">Debug</button>
+  <button class="tab" data-tab="about">About</button>
+</nav>
+
+<main>
+
+  <!-- ── BROWSE ─────────────────────────────────────────────────────────────── -->
+  <section class="tab-panel active" id="tab-browse">
+
+    <!-- sign-in card -->
+    <div class="card" id="connectCard">
+      <h2>Connect to your tenant</h2>
+      <p>InactiveGuests runs entirely in your browser. It signs you in with Microsoft (PKCE) and queries Microsoft Graph as you. No backend, no data leaves your browser.</p>
+      <p><strong>Required delegated permissions:</strong></p>
+      <ul>
+        <li><code>User.Read.All</code> – list guest users</li>
+        <li><code>AuditLog.Read.All</code> – read sign-in activity</li>
+        <li><code>Directory.Read.All</code> – list deleted users</li>
+        <li><code>User.Read</code> – sign-in identity</li>
+        <li><code>User.ReadWrite.All</code> + <code>Directory.AccessAsUser.All</code> <span class="muted">(only when you disable, delete or restore)</span></li>
+        <li><code>Sites.ReadWrite.All</code> <span class="muted">(only when SPO governance integration is enabled)</span></li>
+      </ul>
+      <p>To act on guests you also need <strong>User Administrator</strong> or <strong>Global Administrator</strong> in Entra.</p>
+
+      <div style="margin-bottom:14px">
+        <label style="font-weight:600;display:block;margin-bottom:6px">App Client ID</label>
+        <input type="text" id="clientIdInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:340px;font-family:monospace" />
+        <p class="muted small" style="margin:4px 0 0">Your Entra app registration client ID. Stored in localStorage.</p>
+      </div>
+
+      <button id="signInBtn" class="primary-btn">Sign in with Microsoft</button>
+    </div>
+
+    <!-- browse card (shown after sign-in) -->
+    <div class="card hidden" id="browseCard">
+      <h2>Guest users</h2>
+      <div class="row">
+        <button id="loadGuestsBtn" class="primary-btn">Load all guests</button>
+        <span id="loadStatus" class="muted"></span>
+      </div>
+
+      <div id="progressBox" class="progress-box hidden">
+        <div class="progress-header">
+          <span id="progressLabel">Loading...</span>
+          <span id="progressEta"></span>
+        </div>
+        <div class="progress-bar"><div id="progressFill"></div></div>
+        <div class="progress-footer">
+          <span id="progressCount">0/0</span>
+          <button id="cancelBtn" class="ghost-btn">Cancel</button>
+        </div>
+      </div>
+
+      <div id="filterRow" class="row hidden">
+        <input type="search" id="search" placeholder="Filter name, UPN, mail or company…" />
+        <label>Inactive &gt; <input type="number" id="minInactive" min="0" step="30" value="90" style="width:80px"/> days</label>
+        <label>Min age <input type="number" id="minAge" min="0" step="30" value="0" style="width:80px"/> days</label>
+        <select id="redemption">
+          <option value="any">Any redemption state</option>
+          <option value="PendingAcceptance">Pending acceptance</option>
+          <option value="Accepted">Accepted</option>
+        </select>
+        <select id="enabled">
+          <option value="any">Enabled or disabled</option>
+          <option value="enabled">Only enabled</option>
+          <option value="disabled">Only disabled</option>
+        </select>
+        <select id="neverSignedIn">
+          <option value="any">Signed in or not</option>
+          <option value="never">Never signed in</option>
+          <option value="signed">Has signed in</option>
+        </select>
+        <label class="checkbox"><input type="checkbox" id="hideExcluded" checked/> Hide excluded</label>
+      </div>
+
+      <p id="ownerNotice" class="notice notice-info hidden">
+        Sign-in activity requires Entra ID P1 or P2. If "Last sign-in" is mostly empty the tool falls back to account creation date for inactivity.
+      </p>
+      <p id="exclusionNotice" class="notice notice-warn hidden"></p>
+
+      <div id="tableWrap" class="table-wrap hidden">
+        <table class="data-table sortable" id="guestsTable">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="selectAll" /></th>
+              <th data-sort="displayName">Display name</th>
+              <th data-sort="userPrincipalName">UPN</th>
+              <th data-sort="redemptionState">Redemption</th>
+              <th data-sort="accountEnabled">Enabled</th>
+              <th data-sort="createdDateTime">Created</th>
+              <th data-sort="lastSignIn">Last sign-in</th>
+              <th data-sort="inactiveDays">Inactive</th>
+              <th>Governance</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="tableHint" class="table-hint hidden"></p>
+
+      <div class="action-bar hidden" id="actionBar">
+        <span class="grow"><strong id="selCount">0</strong> guest(s) selected</span>
+        <button id="exportXlsxBtn" class="ghost-btn">Export XLSX</button>
+        <button id="exportCsvBtn" class="ghost-btn">Export CSV</button>
+        <button id="disableBtn" class="ghost-btn">Disable</button>
+        <button id="enableBtn" class="ghost-btn">Enable</button>
+        <button id="deleteBtn" class="danger-btn">Delete</button>
+      </div>
+      <ul id="actionResults" class="action-result-list hidden"></ul>
+    </div>
+  </section>
+
+  <!-- ── RECYCLE BIN ─────────────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-recycle">
+    <div class="card">
+      <h2>Recently deleted guests</h2>
+      <p class="table-hint">Entra keeps deleted users for 30 days, then purges them.</p>
+      <div class="row">
+        <button id="loadDeletedBtn" class="primary-btn">Load deleted guests</button>
+        <span id="loadDelStatus" class="muted"></span>
+      </div>
+      <div id="delTableWrap" class="table-wrap hidden">
+        <table class="data-table" id="deletedTable">
+          <thead><tr><th>Display name</th><th>UPN</th><th>Deleted</th><th>Purged in</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="delHint" class="table-hint hidden"></p>
+    </div>
+  </section>
+
+  <!-- ── SETTINGS ────────────────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-settings">
+    <div class="card">
+      <h2>SharePoint Governance Integration</h2>
+      <p>When enabled, InactiveGuests will:</p>
+      <ul>
+        <li><strong>Read the exclusion list</strong> – guests on this list are protected and cannot be actioned. They are marked 🔒 in the table.</li>
+        <li><strong>Write to the audit log</strong> – every Disable, Enable, Delete or Restore action is appended to the same <code>GuestAuditLog</code> SharePoint list used by the Azure Automation runbook, giving you a single permanent audit trail.</li>
+      </ul>
+      <p class="notice notice-warn">This requires the <code>Sites.ReadWrite.All</code> delegated permission. You will be prompted to consent on the next action if not already granted.</p>
+
+      <div style="display:grid;gap:14px;max-width:560px;margin-top:18px">
+
+        <div>
+          <label style="font-weight:600;display:block;margin-bottom:4px">SharePoint site URL</label>
+          <input type="url" id="spoSiteUrl" placeholder="https://contoso.sharepoint.com/sites/ITGovernance" style="width:100%" />
+          <p class="muted small" style="margin:3px 0 0">The site that hosts both SharePoint lists.</p>
+        </div>
+
+        <div>
+          <label style="font-weight:600;display:block;margin-bottom:4px">Exclusion list name</label>
+          <input type="text" id="spoExclusionList" placeholder="GuestExclusionList" style="width:100%" />
+        </div>
+
+        <div>
+          <label style="font-weight:600;display:block;margin-bottom:4px">Audit log list name</label>
+          <input type="text" id="spoAuditList" placeholder="GuestAuditLog" style="width:100%" />
+        </div>
+
+        <div>
+          <label class="checkbox">
+            <input type="checkbox" id="spoEnabled" />
+            <strong>Enable SharePoint governance integration</strong>
+          </label>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center">
+          <button id="spoSaveBtn" class="primary-btn">Save &amp; test connection</button>
+          <span id="spoTestStatus" class="muted small"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>App Registration</h2>
+      <p>Enter your Entra app registration client ID. The app must be registered with the delegated permissions listed on the sign-in screen.</p>
+      <div style="max-width:400px">
+        <label style="font-weight:600;display:block;margin-bottom:4px">Client ID</label>
+        <input type="text" id="settingsClientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:100%;font-family:monospace" />
+        <p class="muted small" style="margin:3px 0 0">Stored in localStorage. Sign out and back in after changing.</p>
+        <button id="saveClientIdBtn" class="ghost-btn" style="margin-top:10px">Save client ID</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── DEBUG ──────────────────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-debug">
+    <div class="card">
+      <div class="row between">
+        <h2>Debug log</h2>
+        <div>
+          <label class="checkbox"><input type="checkbox" id="verboseLog"/> Verbose</label>
+          <button id="clearLogBtn" class="ghost-btn">Clear</button>
+        </div>
+      </div>
+      <pre id="logPanel" class="log-panel"></pre>
+    </div>
+  </section>
+
+  <!-- ── ABOUT ──────────────────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-about">
+    <div class="card">
+      <h2>About InactiveGuests</h2>
+      <p>InactiveGuests surfaces dormant guest accounts in your Entra ID tenant so you can disable, delete or restore them in bulk. It is designed to work alongside the <strong>Automated Guest User Lifecycle Management</strong> runbook — sharing the same exclusion list and audit log so interactive and automated actions are visible in one place.</p>
+
+      <h3>SharePoint integration</h3>
+      <p>Configure your SharePoint site URL and list names in the <strong>Settings</strong> tab. Once enabled:</p>
+      <ul>
+        <li>Guests on the <code>GuestExclusionList</code> are highlighted 🔒 and blocked from bulk actions.</li>
+        <li>Every interactive Disable / Enable / Delete / Restore is written to <code>GuestAuditLog</code> with <code>Action=Interactive</code>, the admin's UPN, and a timestamp — so it appears alongside runbook actions in the same list.</li>
+      </ul>
+
+      <h3>What it can do</h3>
+      <ul>
+        <li>List every guest with creation date, redemption state, enabled status, and last sign-in (interactive + non-interactive).</li>
+        <li>Filter on inactivity threshold, account age, redemption state, enabled state, and sign-in history.</li>
+        <li>Bulk disable, re-enable, or delete selected guests with an explicit confirmation dialog.</li>
+        <li>Export filtered or selected guests to XLSX or CSV.</li>
+        <li>Browse the recycle bin and restore any guest within the 30-day window.</li>
+      </ul>
+
+      <h3>How sign-in activity works</h3>
+      <p>Takes the most recent of <code>lastSignInDateTime</code> and <code>lastNonInteractiveSignInDateTime</code>. If neither exists, falls back to <code>createdDateTime</code> so new guests don't appear "inactive forever". Requires Entra ID P1 or P2 for sign-in data to be available.</p>
+
+      <h3>Permissions</h3>
+      <p>Read-only browsing: <code>User.Read.All</code>, <code>AuditLog.Read.All</code>, <code>Directory.Read.All</code>, <code>User.Read</code>.<br>
+      Write actions: adds <code>User.ReadWrite.All</code>, <code>Directory.AccessAsUser.All</code>.<br>
+      SPO integration: adds <code>Sites.ReadWrite.All</code>.</p>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<div id="confirmModal" class="modal hidden" role="dialog">
+  <div class="modal-backdrop"></div>
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h3 id="confirmTitle">Confirm</h3>
+      <button id="confirmCloseBtn" class="icon-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="confirmBody"></div>
+    <div class="modal-header" style="border-top:1px solid var(--border);border-bottom:none">
+      <span></span>
+      <div>
+        <button id="confirmCancelBtn" class="ghost-btn">Cancel</button>
+        <button id="confirmOkBtn" class="danger-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════════
+   LOG
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  const state = { verbose: false, entries: [] };
+  function format(level, args) {
+    const ts = new Date().toISOString().substring(11, 23);
+    const text = args.map(a => {
+      if (a instanceof Error) return a.stack || a.message;
+      if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
+      return String(a);
+    }).join(' ');
+    return { ts, level, text };
+  }
+  function append(entry) {
+    state.entries.push(entry);
+    if (state.entries.length > 5000) state.entries.shift();
+    const panel = document.getElementById('logPanel');
+    if (!panel) return;
+    if (entry.level === 'dbg' && !state.verbose) return;
+    const line = document.createElement('div');
+    line.className = `log-${entry.level}`;
+    line.textContent = `[${entry.ts}] ${entry.level.toUpperCase().padEnd(4)} ${entry.text}`;
+    panel.appendChild(line);
+    panel.scrollTop = panel.scrollHeight;
+  }
+  window.Log = {
+    dbg:  (...a) => append(format('dbg',  a)),
+    info: (...a) => { append(format('info', a)); console.log(...a); },
+    warn: (...a) => { append(format('warn', a)); console.warn(...a); },
+    err:  (...a) => { append(format('err',  a)); console.error(...a); },
+    setVerbose(v) { state.verbose = v; },
+    clear() { state.entries = []; const p = document.getElementById('logPanel'); if (p) p.textContent = ''; },
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CONCURRENCY
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  class CancelToken {
+    constructor() { this.cancelled = false; this._listeners = []; }
+    cancel() { this.cancelled = true; this._listeners.forEach(fn => { try { fn(); } catch {} }); }
+    onCancel(fn) { this._listeners.push(fn); }
+  }
+  async function pmap(items, mapper, { concurrency = 8, onProgress, cancelToken } = {}) {
+    const results = new Array(items.length);
+    let next = 0, done = 0;
+    async function worker() {
+      while (true) {
+        if (cancelToken && cancelToken.cancelled) return;
+        const i = next++;
+        if (i >= items.length) return;
+        try { results[i] = await mapper(items[i], i); }
+        catch (e) { results[i] = { __error: e }; }
+        finally { done++; if (onProgress) onProgress(done, items.length); }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+    return results;
+  }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  window.Concurrency = { pmap, sleep, CancelToken };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   AUTH  (MSAL PKCE – no .auth file, client ID from settings)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  let msal = null, account = null;
+  const _tokenInflight = new Map();
+
+  const SCOPES = {
+    read:  ['https://graph.microsoft.com/User.Read.All','https://graph.microsoft.com/AuditLog.Read.All','https://graph.microsoft.com/Directory.Read.All','https://graph.microsoft.com/User.Read'],
+    write: ['https://graph.microsoft.com/User.ReadWrite.All','https://graph.microsoft.com/Directory.AccessAsUser.All'],
+    spo:   ['https://graph.microsoft.com/Sites.ReadWrite.All'],
+  };
+
+  function getClientId() {
+    return localStorage.getItem('ig-clientId') || '';
+  }
+
+  async function init() {
+    const clientId = getClientId();
+    if (!clientId) throw new Error('No client ID configured. Go to Settings and enter your app registration client ID.');
+    if (window.__msalLoadFailed || !window.msal?.PublicClientApplication) throw new Error('MSAL.js failed to load from CDN.');
+
+    msal = new window.msal.PublicClientApplication({
+      auth: { clientId, authority: 'https://login.microsoftonline.com/organizations', redirectUri: window.location.href.split('?')[0].split('#')[0] },
+      cache: { cacheLocation: 'localStorage' },
+    });
+    await msal.initialize();
+    const resp = await msal.handleRedirectPromise().catch(e => { Log.err('Redirect handler:', e); return null; });
+    if (resp?.account) account = resp.account;
+    else { const accs = msal.getAllAccounts(); if (accs.length) account = accs[0]; }
+    return account;
+  }
+
+  async function signIn() {
+    const req = { scopes: SCOPES.read, prompt: 'select_account' };
+    try { const r = await msal.loginPopup(req); account = r.account; }
+    catch (e) { Log.warn('Popup failed, using redirect:', e.message); await msal.loginRedirect(req); return null; }
+    return account;
+  }
+
+  async function signOut() {
+    if (!account) return;
+    try { await msal.logoutPopup({ account }); } catch (e) { Log.warn('Logout popup failed:', e.message); }
+    account = null;
+  }
+
+  async function getToken(scopes) {
+    if (!account) throw new Error('Not signed in');
+    const key = scopes.join('|');
+    if (_tokenInflight.has(key)) return _tokenInflight.get(key);
+    const p = (async () => {
+      try { const r = await msal.acquireTokenSilent({ scopes, account }); return r.accessToken; }
+      catch { const r = await msal.acquireTokenPopup({ scopes, account }); return r.accessToken; }
+    })();
+    _tokenInflight.set(key, p);
+    try { return await p; } finally { _tokenInflight.delete(key); }
+  }
+
+  window.Auth = {
+    init, signIn, signOut,
+    getReadToken:  () => getToken(SCOPES.read),
+    getWriteToken: () => getToken([...SCOPES.read, ...SCOPES.write]),
+    getSpoToken:   () => getToken([...SCOPES.read, ...SCOPES.write, ...SCOPES.spo]),
+    getAccount:    () => account,
+    getClientId,
+    setClientId:   (id) => localStorage.setItem('ig-clientId', id),
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   GRAPH  (Microsoft Graph API client)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  const V1   = 'https://graph.microsoft.com/v1.0';
+  const BETA = 'https://graph.microsoft.com/beta';
+
+  async function callRaw(url, { method='GET', body, headers={}, attempt=0, write=false, spo=false }={}) {
+    const token = spo ? await Auth.getSpoToken() : write ? await Auth.getWriteToken() : await Auth.getReadToken();
+    const opts = {
+      method,
+      headers: { Authorization:`Bearer ${token}`, Accept:'application/json', ...(body?{'Content-Type':'application/json'}:{}), ...headers },
+    };
+    if (body) opts.body = typeof body === 'string' ? body : JSON.stringify(body);
+    Log.dbg(`GRAPH ${method} ${url}`);
+    const res = await fetch(url, opts);
+    if (res.status === 429 || res.status === 503 || res.status === 504) {
+      const ra = parseInt(res.headers.get('Retry-After')||'0', 10);
+      const wait = (ra > 0 ? ra : Math.min(60, 2**attempt)) * 1000;
+      if (attempt >= 5) throw new Error(`Graph ${res.status} after retries`);
+      Log.warn(`Graph ${res.status}, backing off ${wait}ms`);
+      await Concurrency.sleep(wait);
+      return callRaw(url, { method, body, headers, attempt:attempt+1, write, spo });
+    }
+    return res;
+  }
+
+  async function call(url, opts={}) {
+    const res = await callRaw(url, opts);
+    if (!res.ok) {
+      const txt = await res.text().catch(()=>'');
+      const e = new Error(`Graph ${res.status} ${res.statusText}: ${txt.substring(0,400)}`);
+      e.status = res.status;
+      throw e;
+    }
+    if (res.status === 204) return null;
+    return res.headers.get('Content-Type')?.includes('json') ? res.json() : res.text();
+  }
+
+  async function listAllGuests(onProgress) {
+    const select = ['id','userPrincipalName','displayName','mail','userType','externalUserState','externalUserStateChangeDateTime','createdDateTime','creationType','accountEnabled','companyName','signInActivity'].join(',');
+    const out = []; let pageNo = 0;
+    let next = `${BETA}/users?$filter=userType eq 'Guest'&$select=${select}&$top=999`;
+    while (next) {
+      const data = await call(next, { headers:{ ConsistencyLevel:'eventual' } });
+      if (data?.value) out.push(...data.value);
+      pageNo++;
+      if (onProgress) onProgress(out.length, pageNo);
+      next = data?.['@odata.nextLink'];
+    }
+    return out;
+  }
+
+  async function listDeletedGuests(onProgress) {
+    const select = 'id,displayName,userPrincipalName,mail,userType,accountEnabled,deletedDateTime';
+    const out = []; let pageNo = 0;
+    let next = `${V1}/directory/deletedItems/microsoft.graph.user?$filter=userType eq 'Guest'&$select=${select}&$top=999`;
+    while (next) {
+      const data = await call(next, { headers:{ ConsistencyLevel:'eventual' } });
+      if (data?.value) out.push(...data.value);
+      pageNo++;
+      if (onProgress) onProgress(out.length, pageNo);
+      next = data?.['@odata.nextLink'];
+    }
+    return out;
+  }
+
+  // ── SPO Graph calls (REST, not SDK) ──────────────────────────────────────────
+  // Resolves the internal SharePoint site ID from the site URL
+  async function getSpoSiteId(siteUrl) {
+    const u = new URL(siteUrl);
+    // e.g. https://contoso.sharepoint.com/sites/foo  →  hostname=/sites/foo
+    const endpoint = `${V1}/sites/${u.hostname}:${u.pathname}`;
+    const data = await call(endpoint, { spo: true });
+    return data.id; // format: "contoso.sharepoint.com,<site-guid>,<web-guid>"
+  }
+
+  // Gets the internal list ID for a named list on a site
+  async function getSpoListId(siteId, listName) {
+    const data = await call(`${V1}/sites/${siteId}/lists?$filter=displayName eq '${encodeURIComponent(listName)}'&$select=id,displayName`, { spo:true });
+    if (!data?.value?.length) throw new Error(`SharePoint list "${listName}" not found on site.`);
+    return data.value[0].id;
+  }
+
+  // Reads all items from a SPO list (paged)
+  async function getSpoListItems(siteId, listId, fields) {
+    const out = [];
+    let next = `${V1}/sites/${siteId}/lists/${listId}/items?$expand=fields($select=${fields.join(',')})&$top=500`;
+    while (next) {
+      const data = await call(next, { spo:true });
+      if (data?.value) out.push(...data.value.map(i => i.fields));
+      next = data?.['@odata.nextLink'];
+    }
+    return out;
+  }
+
+  // Appends one item to a SPO list
+  async function addSpoListItem(siteId, listId, fields) {
+    return call(`${V1}/sites/${siteId}/lists/${listId}/items`, {
+      method: 'POST', body: { fields }, spo: true,
+    });
+  }
+
+  function disableUser(id)  { return call(`${V1}/users/${id}`, { method:'PATCH', body:{ accountEnabled:false }, write:true }); }
+  function enableUser(id)   { return call(`${V1}/users/${id}`, { method:'PATCH', body:{ accountEnabled:true  }, write:true }); }
+  function deleteUser(id)   { return call(`${V1}/users/${id}`, { method:'DELETE', write:true }); }
+  function restoreUser(id)  { return call(`${V1}/directory/deletedItems/${id}/restore`, { method:'POST', write:true }); }
+
+  window.Graph = {
+    call, listAllGuests, listDeletedGuests,
+    getSpoSiteId, getSpoListId, getSpoListItems, addSpoListItem,
+    disableUser, enableUser, deleteUser, restoreUser,
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   SPO GOVERNANCE  (exclusion list + audit log)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  // Config stored in localStorage
+  const CFG_KEY = 'ig-spo-config';
+
+  function loadConfig() {
+    try { return JSON.parse(localStorage.getItem(CFG_KEY) || 'null') || {}; } catch { return {}; }
+  }
+  function saveConfig(cfg) { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+
+  // Runtime state (populated on first use)
+  const _cache = { siteId:null, exclusionListId:null, auditListId:null, exclusions:null };
+
+  function isEnabled() {
+    const c = loadConfig();
+    return !!(c.enabled && c.siteUrl && c.exclusionList && c.auditList);
+  }
+
+  async function _ensureIds() {
+    if (_cache.siteId) return;
+    const c = loadConfig();
+    Log.info('SPO: resolving site and list IDs…');
+    _cache.siteId = await Graph.getSpoSiteId(c.siteUrl);
+    _cache.exclusionListId = await Graph.getSpoListId(_cache.siteId, c.exclusionList);
+    _cache.auditListId     = await Graph.getSpoListId(_cache.siteId, c.auditList);
+    Log.info(`SPO: siteId=${_cache.siteId}`);
+  }
+
+  // Returns a Set of excluded emails (lowercased) and a Set of excluded objectIds
+  async function loadExclusions() {
+    if (!isEnabled()) return { emails: new Set(), objectIds: new Set(), raw: [] };
+    await _ensureIds();
+    Log.info('SPO: loading exclusion list…');
+    const items = await Graph.getSpoListItems(_cache.siteId, _cache.exclusionListId, ['GuestEmail','ObjectId','Reason']);
+    _cache.exclusions = items;
+    const emails    = new Set(items.map(i => (i.GuestEmail||'').toLowerCase().trim()).filter(Boolean));
+    const objectIds = new Set(items.map(i => (i.ObjectId||'').trim()).filter(Boolean));
+    Log.info(`SPO: ${emails.size} excluded emails, ${objectIds.size} excluded objectIds`);
+    return { emails, objectIds, raw: items };
+  }
+
+  // Returns true if a guest is on the exclusion list
+  function isExcluded(guest, exclusions) {
+    if (!exclusions) return false;
+    if (exclusions.objectIds.has(guest.id)) return true;
+    const email = (guest.mail || guest.userPrincipalName || '').toLowerCase();
+    return exclusions.emails.has(email);
+  }
+
+  // Appends an audit record for an interactive action
+  async function logAction({ action, actionTaken, guest, adminUpn, notes = '' }) {
+    if (!isEnabled()) return;
+    try {
+      await _ensureIds();
+      const now = new Date().toISOString();
+      await Graph.addSpoListItem(_cache.siteId, _cache.auditListId, {
+        Title:         `Interactive-${Date.now()}`,  // unique key
+        RunTimestamp:  now,
+        Action:        action,          // e.g. "Disable", "Delete", "Enable", "Restore"
+        ActionTaken:   actionTaken,     // e.g. "Disabled", "Deleted", "Failed"
+        GuestEmail:    guest.mail || guest.userPrincipalName || '',
+        GuestObjectId: guest.id || '',
+        DisplayName:   guest.displayName || '',
+        InactiveDays:  guest.inactiveDays || 0,
+        SponsorEmail:  adminUpn,        // the admin performing the action is the "sponsor" for traceability
+        ReportOnly:    false,
+        Notes:         notes || `Interactive action by ${adminUpn}`,
+      });
+      Log.info(`SPO audit: logged ${action}/${actionTaken} for ${guest.mail || guest.userPrincipalName}`);
+    } catch (e) {
+      Log.warn(`SPO audit write failed for ${guest.mail}: ${e.message}`);
+      // Non-fatal — action has already been taken in Graph
+    }
+  }
+
+  // Test connection: resolve IDs and load a handful of exclusion items
+  async function testConnection(siteUrl, exclusionList, auditList) {
+    // Reset cache so we re-resolve with potentially new URLs
+    _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null;
+    const tmpCfg = loadConfig();
+    // Temporarily override for the test
+    const saved = { ...tmpCfg };
+    saveConfig({ ...tmpCfg, siteUrl, exclusionList, auditList, enabled: true });
+    try {
+      await _ensureIds();
+      const items = await Graph.getSpoListItems(_cache.siteId, _cache.exclusionListId, ['GuestEmail','ObjectId']);
+      return { ok: true, exclusionCount: items.length };
+    } catch (e) {
+      // Restore cache reset
+      _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null;
+      saveConfig(saved);
+      throw e;
+    }
+  }
+
+  window.Spo = { loadConfig, saveConfig, isEnabled, loadExclusions, isExcluded, logAction, testConnection };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   GUESTS  (pure helpers)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  const ZERO = '0001-01-01T00:00:00Z';
+  function lastSignInDate(user) {
+    const sa = user?.signInActivity;
+    if (!sa) return null;
+    const cands = [sa.lastSignInDateTime, sa.lastNonInteractiveSignInDateTime]
+      .filter(v => v && v !== ZERO).map(v => new Date(v)).filter(d => !isNaN(d));
+    return cands.length ? new Date(Math.max(...cands.map(d => d.getTime()))) : null;
+  }
+  function daysBetween(a, b) { if (!a||!b) return null; return Math.floor((b-a)/86400000); }
+  function enrich(user, now=new Date()) {
+    const last = lastSignInDate(user);
+    const created = user.createdDateTime ? new Date(user.createdDateTime) : null;
+    const accountAgeDays = created ? daysBetween(created, now) : null;
+    return { ...user, lastSignIn:last, inactiveDays: last ? daysBetween(last,now) : accountAgeDays,
+      accountAgeDays, neverSignedIn:!last,
+      redemptionState: user.externalUserState==='PendingAcceptance' ? 'PendingAcceptance' : user.externalUserState==='Accepted' ? 'Accepted' : 'Unknown' };
+  }
+  function passesFilter(g, f) {
+    if (f.search) { const q=f.search.toLowerCase(); const hay=`${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}`.toLowerCase(); if(!hay.includes(q)) return false; }
+    if (f.redemption&&f.redemption!=='any'&&g.redemptionState!==f.redemption) return false;
+    if (f.enabled==='enabled'&&!g.accountEnabled) return false;
+    if (f.enabled==='disabled'&&g.accountEnabled) return false;
+    if (f.neverSignedIn==='never'&&!g.neverSignedIn) return false;
+    if (f.neverSignedIn==='signed'&&g.neverSignedIn) return false;
+    if (typeof f.minInactive==='number'&&(g.inactiveDays==null||g.inactiveDays<f.minInactive)) return false;
+    if (typeof f.minAge==='number'&&(g.accountAgeDays==null||g.accountAgeDays<f.minAge)) return false;
+    return true;
+  }
+  function fmtDate(d) { if(!d) return ''; const dt=d instanceof Date?d:new Date(d); if(isNaN(dt)) return ''; return dt.toISOString().substring(0,10); }
+  window.Guests = { lastSignInDate, daysBetween, enrich, passesFilter, fmtDate };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   EXPORT
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  const COLS = [
+    {key:'displayName',label:'Display name'},{key:'userPrincipalName',label:'UPN'},{key:'mail',label:'Mail'},
+    {key:'companyName',label:'Company'},{key:'accountEnabled',label:'Enabled'},{key:'redemptionState',label:'Redemption'},
+    {key:'createdDateTime',label:'Created'},{key:'accountAgeDays',label:'Age (days)'},
+    {key:'lastSignIn',label:'Last sign-in'},{key:'inactiveDays',label:'Inactive (days)'},
+    {key:'excluded',label:'Excluded'},{key:'id',label:'Object id'},
+  ];
+  function rowsFor(guests) {
+    return guests.map(g => {
+      const r={};
+      for (const c of COLS) {
+        let v=g[c.key];
+        if (c.key==='createdDateTime'||c.key==='lastSignIn') v=Guests.fmtDate(v);
+        if (typeof v==='boolean') v=v?'Yes':'No';
+        r[c.label]=v==null?'':v;
+      }
+      return r;
+    });
+  }
+  async function ensureXlsx() {
+    if (window.XLSX) return window.XLSX;
+    await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload=res; s.onerror=()=>rej(new Error('xlsx CDN failed')); document.head.appendChild(s); });
+    return window.XLSX;
+  }
+  async function exportXlsx(guests,filename='inactive-guests.xlsx') {
+    const XLSX=await ensureXlsx(); const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rowsFor(guests)),'Guests');
+    XLSX.writeFile(wb,filename);
+  }
+  function exportCsv(guests,filename='inactive-guests.csv') {
+    const rows=rowsFor(guests); if(!rows.length) return;
+    const headers=Object.keys(rows[0]);
+    const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+    const csv=[headers.join(','),...rows.map(r=>headers.map(h=>esc(r[h])).join(','))].join('\r\n');
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),0);
+  }
+  window.Export = { exportXlsx, exportCsv };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   APP  (main wiring)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+(() => {
+  const state = {
+    guests: [], filtered: [], selected: new Set(),
+    sort: { col:'inactiveDays', dir:'desc' },
+    deleted: [], cancelToken: null,
+    exclusions: null,   // { emails, objectIds, raw } — null = not loaded / SPO off
+  };
+
+  // ── THEME ────────────────────────────────────────────────────────────────────
+  function initTheme() { document.documentElement.setAttribute('data-theme', localStorage.getItem('ig-theme')||'light'); }
+  function toggleTheme() { const n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark'; document.documentElement.setAttribute('data-theme',n); localStorage.setItem('ig-theme',n); }
+
+  // ── TABS ─────────────────────────────────────────────────────────────────────
+  function activateTab(id) {
+    document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===id));
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${id}`));
+  }
+
+  // ── TOAST / MODAL ────────────────────────────────────────────────────────────
+  function toast(msg, kind='info') {
+    const el=document.getElementById('toast'); el.textContent=msg; el.className=`toast toast-${kind}`;
+    el.classList.remove('hidden'); clearTimeout(toast._t); toast._t=setTimeout(()=>el.classList.add('hidden'),4000);
+  }
+  function confirmModal(title, htmlBody, okLabel='Confirm') {
+    return new Promise(resolve=>{
+      document.getElementById('confirmTitle').textContent=title;
+      document.getElementById('confirmBody').innerHTML=htmlBody;
+      const ok=document.getElementById('confirmOkBtn'); ok.textContent=okLabel;
+      const modal=document.getElementById('confirmModal'); modal.classList.remove('hidden');
+      const cleanup=val=>{ modal.classList.add('hidden'); ok.removeEventListener('click',okFn); document.getElementById('confirmCancelBtn').removeEventListener('click',cancelFn); document.getElementById('confirmCloseBtn').removeEventListener('click',cancelFn); resolve(val); };
+      const okFn=()=>cleanup(true), cancelFn=()=>cleanup(false);
+      ok.addEventListener('click',okFn); document.getElementById('confirmCancelBtn').addEventListener('click',cancelFn); document.getElementById('confirmCloseBtn').addEventListener('click',cancelFn);
+    });
+  }
+
+  // ── SPO STATUS BADGE ─────────────────────────────────────────────────────────
+  function updateSpoBadge() {
+    const badge=document.getElementById('spoStatusBadge');
+    if (!Spo.isEnabled()) { badge.className='spo-status off'; badge.textContent='SPO: off'; return; }
+    if (state.exclusions) { badge.className='spo-status ok'; badge.textContent=`SPO: on (${state.exclusions.raw.length} excluded)`; }
+    else { badge.className='spo-status warn'; badge.textContent='SPO: connecting…'; }
+  }
+
+  // ── AUTH UI ──────────────────────────────────────────────────────────────────
+  async function refreshAuthUI() {
+    const acc=Auth.getAccount();
+    document.getElementById('userBox').classList.toggle('hidden',!acc);
+    if (acc) document.getElementById('userName').textContent=acc.username||acc.name||'Signed in';
+    document.getElementById('connectCard').classList.toggle('hidden',!!acc);
+    document.getElementById('browseCard').classList.toggle('hidden',!acc);
+  }
+  async function onSignIn() {
+    const clientId=document.getElementById('clientIdInput').value.trim();
+    if (clientId) Auth.setClientId(clientId);
+    try {
+      await Auth.init();
+      await Auth.signIn();
+      await refreshAuthUI();
+      await loadSpoExclusions();
+    } catch (e) { Log.err('Sign-in failed:', e); toast('Sign-in failed: '+e.message,'err'); }
+  }
+  async function onSignOut() {
+    await Auth.signOut(); state.guests=[]; state.filtered=[]; state.selected.clear(); state.exclusions=null;
+    renderTable(); await refreshAuthUI(); updateSpoBadge();
+  }
+
+  // ── SPO EXCLUSIONS ───────────────────────────────────────────────────────────
+  async function loadSpoExclusions() {
+    if (!Spo.isEnabled()) { state.exclusions=null; updateSpoBadge(); return; }
+    try {
+      updateSpoBadge();
+      state.exclusions = await Spo.loadExclusions();
+      updateSpoBadge();
+      const notice=document.getElementById('exclusionNotice');
+      if (state.exclusions.raw.length) {
+        notice.textContent=`⚠ ${state.exclusions.raw.length} account(s) are on the governance exclusion list and cannot be actioned. They are marked 🔒 in the table.`;
+        notice.classList.remove('hidden');
+      } else notice.classList.add('hidden');
+      // Re-apply filter to pick up exclusion state
+      if (state.guests.length) applyFilter();
+    } catch (e) {
+      Log.warn('SPO exclusion load failed:', e.message);
+      state.exclusions=null; updateSpoBadge();
+      toast('SPO exclusion list unavailable: '+e.message,'warn');
+    }
+  }
+
+  // ── LOAD GUESTS ──────────────────────────────────────────────────────────────
+  async function loadGuests() {
+    const btn=document.getElementById('loadGuestsBtn'); btn.disabled=true;
+    const status=document.getElementById('loadStatus');
+    const box=document.getElementById('progressBox');
+    const fill=document.getElementById('progressFill');
+    const count=document.getElementById('progressCount');
+    box.classList.remove('hidden'); fill.style.width='0%'; count.textContent='0';
+    state.cancelToken=new Concurrency.CancelToken();
+    document.getElementById('cancelBtn').onclick=()=>state.cancelToken.cancel();
+    const t0=Date.now();
+    try {
+      const raw=await Graph.listAllGuests((loaded,page)=>{
+        if (state.cancelToken.cancelled) throw new Error('Cancelled');
+        count.textContent=`${loaded} loaded (${page} pages)`;
+        fill.style.width=Math.min(95,page*8)+'%';
+      });
+      const now=new Date();
+      state.guests=raw.map(g=>Guests.enrich(g,now));
+      fill.style.width='100%';
+      const dt=((Date.now()-t0)/1000).toFixed(1);
+      status.textContent=`Loaded ${state.guests.length} guests in ${dt}s`;
+      Log.info(`Loaded ${state.guests.length} guests in ${dt}s`);
+      const hasSignIn=state.guests.filter(g=>g.lastSignIn).length;
+      document.getElementById('ownerNotice').classList.toggle('hidden', !(state.guests.length>0&&hasSignIn/state.guests.length<0.1));
+      document.getElementById('filterRow').classList.remove('hidden');
+      applyFilter();
+    } catch(e) { Log.err('Load failed:',e); toast('Load failed: '+e.message,'err'); }
+    finally { btn.disabled=false; setTimeout(()=>box.classList.add('hidden'),600); }
+  }
+
+  // ── FILTER ───────────────────────────────────────────────────────────────────
+  function readFilter() {
+    return {
+      search: document.getElementById('search').value.trim(),
+      minInactive: parseInt(document.getElementById('minInactive').value,10)||0,
+      minAge: parseInt(document.getElementById('minAge').value,10)||0,
+      redemption: document.getElementById('redemption').value,
+      enabled: document.getElementById('enabled').value,
+      neverSignedIn: document.getElementById('neverSignedIn').value,
+      hideExcluded: document.getElementById('hideExcluded').checked,
+    };
+  }
+  function applyFilter() {
+    const f=readFilter();
+    // Tag each guest with excluded status
+    state.guests.forEach(g => { g.excluded = state.exclusions ? Spo.isExcluded(g, state.exclusions) : false; });
+    state.filtered=state.guests.filter(g=>{
+      if (f.hideExcluded && g.excluded) return false;
+      return Guests.passesFilter(g,f);
+    });
+    for (const id of [...state.selected]) { if (!state.filtered.some(g=>g.id===id)) state.selected.delete(id); }
+    renderTable();
+  }
+
+  // ── TABLE ────────────────────────────────────────────────────────────────────
+  function sortGuests(rows) {
+    const {col,dir}=state.sort; const m=dir==='asc'?1:-1;
+    const k=g=>{ switch(col){
+      case 'displayName': return (g.displayName||'').toLowerCase();
+      case 'userPrincipalName': return (g.userPrincipalName||'').toLowerCase();
+      case 'redemptionState': return g.redemptionState||'';
+      case 'accountEnabled': return g.accountEnabled?1:0;
+      case 'createdDateTime': return g.createdDateTime||'';
+      case 'lastSignIn': return g.lastSignIn?g.lastSignIn.getTime():-1;
+      case 'inactiveDays': return g.inactiveDays==null?-1:g.inactiveDays;
+      default: return '';
+    }};
+    return rows.slice().sort((a,b)=>{ const ka=k(a),kb=k(b); return ka>kb?m:ka<kb?-m:0; });
+  }
+
+  function governanceBadge(g) {
+    if (g.excluded) return '<span class="badge excluded" title="On governance exclusion list — cannot be actioned">🔒 Excluded</span>';
+    return '<span class="muted small">—</span>';
+  }
+
+  function escHtml(s) { return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function escAttr(s) { return escHtml(s); }
+
+  function renderTable() {
+    const wrap=document.getElementById('tableWrap');
+    const hint=document.getElementById('tableHint');
+    const bar=document.getElementById('actionBar');
+    const tbody=document.querySelector('#guestsTable tbody');
+    if (!state.guests.length) { wrap.classList.add('hidden'); hint.classList.add('hidden'); bar.classList.add('hidden'); return; }
+    wrap.classList.remove('hidden'); hint.classList.remove('hidden'); bar.classList.remove('hidden');
+    const rows=sortGuests(state.filtered).slice(0,1000);
+    hint.textContent=`${state.filtered.length} match${state.filtered.length===1?'':'es'}`+(state.filtered.length>rows.length?` (showing first ${rows.length})`:'');
+    tbody.innerHTML=rows.map(g=>`
+      <tr data-id="${escAttr(g.id)}"${g.excluded?' class="excluded-row"':''}>
+        <td><input type="checkbox" data-act="sel" ${state.selected.has(g.id)?'checked':''} ${g.excluded?'disabled':''}/></td>
+        <td><strong>${escHtml(g.displayName||'(no name)')}</strong>${g.companyName?`<br><span class="muted small">${escHtml(g.companyName)}</span>`:''}</td>
+        <td><code>${escHtml(g.userPrincipalName||'')}</code>${g.mail&&g.mail!==g.userPrincipalName?`<br><span class="muted small">${escHtml(g.mail)}</span>`:''}</td>
+        <td>${escHtml(g.redemptionState)}</td>
+        <td>${g.accountEnabled?'Yes':'<span class="muted">No</span>'}</td>
+        <td>${escHtml(Guests.fmtDate(g.createdDateTime))}<br><span class="muted small">${g.accountAgeDays!=null?g.accountAgeDays+' days':''}</span></td>
+        <td>${g.lastSignIn?escHtml(Guests.fmtDate(g.lastSignIn)):'<span class="muted">Never</span>'}</td>
+        <td>${g.inactiveDays==null?'':g.inactiveDays+' days'}</td>
+        <td>${governanceBadge(g)}</td>
+      </tr>`).join('');
+    document.querySelectorAll('#guestsTable thead th').forEach(th=>{ th.classList.remove('sort-asc','sort-desc','sortable-col'); if(th.dataset.sort){th.classList.add('sortable-col');if(th.dataset.sort===state.sort.col)th.classList.add(state.sort.dir==='asc'?'sort-asc':'sort-desc');} });
+    updateSelCount();
+    document.getElementById('selectAll').checked=rows.length>0&&rows.every(g=>state.selected.has(g.id)||g.excluded);
+  }
+
+  function updateSelCount() {
+    document.getElementById('selCount').textContent=String(state.selected.size);
+    const sel=state.selected.size;
+    ['disableBtn','enableBtn','deleteBtn'].forEach(id=>document.getElementById(id).disabled=sel===0);
+    ['exportXlsxBtn','exportCsvBtn'].forEach(id=>document.getElementById(id).disabled=state.filtered.length===0);
+  }
+
+  function onTableChange(e) {
+    const cb=e.target.closest('input[data-act="sel"]'); if(!cb) return;
+    const id=cb.closest('tr').dataset.id;
+    if (cb.checked) state.selected.add(id); else state.selected.delete(id);
+    updateSelCount();
+  }
+  function onSortClick(e) {
+    const th=e.target.closest('th[data-sort]'); if(!th) return;
+    const col=th.dataset.sort;
+    if (state.sort.col===col) state.sort.dir=state.sort.dir==='asc'?'desc':'asc';
+    else { state.sort.col=col; state.sort.dir=col==='inactiveDays'?'desc':'asc'; }
+    renderTable();
+  }
+  function onSelectAll(e) {
+    const checked=e.target.checked;
+    const rows=sortGuests(state.filtered).slice(0,1000);
+    for (const g of rows) {
+      if (g.excluded) continue; // never auto-select excluded accounts
+      if (checked) state.selected.add(g.id); else state.selected.delete(g.id);
+    }
+    renderTable();
+  }
+
+  // ── BULK ACTIONS ─────────────────────────────────────────────────────────────
+  function selectedGuests() { return state.guests.filter(g=>state.selected.has(g.id)); }
+  function previewList(rows,max=20) {
+    const items=rows.slice(0,max).map(g=>`<li>${escHtml(g.displayName||g.userPrincipalName)} <span class="muted small">${escHtml(g.userPrincipalName||'')}</span>${g.excluded?' <span class="badge excluded">🔒 Excluded</span>':''}</li>`).join('');
+    return `<ul>${items}</ul>`+(rows.length>max?`<p class="muted small">+ ${rows.length-max} more</p>`:'');
+  }
+
+  async function bulkAction(label, graphFn, danger=false) {
+    const rows=selectedGuests(); if(!rows.length) return;
+
+    // Separate excluded from actionable
+    const blocked=rows.filter(g=>g.excluded);
+    const toAct=rows.filter(g=>!g.excluded);
+
+    if (!toAct.length) {
+      toast(`All selected accounts are on the exclusion list — no action taken.`,'warn');
+      return;
+    }
+
+    let body=`<p>You are about to <strong>${label.toLowerCase()}</strong> the following ${toAct.length} guest(s):</p>${previewList(toAct)}`;
+    if (blocked.length) body+=`<p class="notice notice-warn">⚠ ${blocked.length} account(s) are on the governance exclusion list and will be skipped.</p>`;
+    if (danger) body+='<p class="notice notice-warn">Deleted users go to the recycle bin for 30 days, then are purged. They lose access to all M365 resources immediately.</p>';
+    if (Spo.isEnabled()) body+=`<p class="notice notice-info">ℹ This action will be logged to the governance audit list in SharePoint.</p>`;
+
+    const ok=await confirmModal(`${label} ${toAct.length} guest(s)?`, body, label);
+    if (!ok) return;
+
+    const adminUpn=Auth.getAccount()?.username||'unknown';
+    const resultsEl=document.getElementById('actionResults');
+    resultsEl.classList.remove('hidden'); resultsEl.innerHTML='';
+
+    // Show skipped excluded items first
+    for (const g of blocked) {
+      const li=document.createElement('li');
+      li.innerHTML=`<span class="skip-mark">⊘</span> Skipped (excluded): ${escHtml(g.displayName||g.userPrincipalName)}`;
+      resultsEl.appendChild(li);
+    }
+
+    await Concurrency.pmap(toAct, async (g)=>{
+      const li=document.createElement('li');
+      li.innerHTML=`<span class="ok-mark">…</span> ${escHtml(g.displayName||g.userPrincipalName)}`;
+      resultsEl.appendChild(li);
+      try {
+        await graphFn(g);
+        const actionTaken=label+'d'; // Disabled / Deleted / Enabled
+        li.innerHTML=`<span class="ok-mark">✓</span> ${label} – ${escHtml(g.displayName||g.userPrincipalName)}`;
+        await Spo.logAction({ action:label, actionTaken, guest:g, adminUpn });
+      } catch(e) {
+        li.innerHTML=`<span class="err-mark">✗</span> ${escHtml(g.displayName||g.userPrincipalName)} – ${escHtml(e.message)}`;
+        Log.err(`${label} failed for ${g.userPrincipalName}:`,e);
+        await Spo.logAction({ action:label, actionTaken:'Failed', guest:g, adminUpn, notes:e.message });
+      }
+    }, { concurrency:4 });
+
+    toast(`${label} complete`, 'ok');
+    state.selected.clear();
+    await loadGuests();
+  }
+
+  function onDisable() { return bulkAction('Disable', g=>Graph.disableUser(g.id)); }
+  function onEnable()  { return bulkAction('Enable',  g=>Graph.enableUser(g.id)); }
+  function onDelete()  { return bulkAction('Delete',  g=>Graph.deleteUser(g.id), true); }
+  function onExportXlsx() { return Export.exportXlsx(state.filtered,`inactive-guests-${new Date().toISOString().substring(0,10)}.xlsx`); }
+  function onExportCsv()  { return Export.exportCsv(state.filtered, `inactive-guests-${new Date().toISOString().substring(0,10)}.csv`); }
+
+  // ── RECYCLE BIN ──────────────────────────────────────────────────────────────
+  async function loadDeleted() {
+    const btn=document.getElementById('loadDeletedBtn'); btn.disabled=true;
+    const status=document.getElementById('loadDelStatus'); status.textContent='Loading…';
+    try {
+      state.deleted=await Graph.listDeletedGuests(n=>{status.textContent=`${n} loaded`;});
+      status.textContent=`${state.deleted.length} deleted guest(s)`;
+      renderDeleted();
+    } catch(e) { Log.err('Load deleted failed:',e); status.textContent='Failed: '+e.message; }
+    finally { btn.disabled=false; }
+  }
+  function renderDeleted() {
+    const wrap=document.getElementById('delTableWrap'); const hint=document.getElementById('delHint');
+    const tbody=document.querySelector('#deletedTable tbody');
+    if (!state.deleted.length) { wrap.classList.add('hidden'); hint.classList.remove('hidden'); hint.textContent='Recycle bin is empty.'; return; }
+    wrap.classList.remove('hidden'); hint.classList.add('hidden');
+    const now=new Date();
+    tbody.innerHTML=state.deleted.map(u=>{
+      const del=u.deletedDateTime?new Date(u.deletedDateTime):null;
+      const purgeDays=del?Math.max(0,30-Guests.daysBetween(del,now)):'?';
+      return `<tr data-id="${escAttr(u.id)}"><td>${escHtml(u.displayName||'(no name)')}</td><td><code>${escHtml(u.userPrincipalName||'')}</code></td><td>${escHtml(Guests.fmtDate(del))}</td><td>${purgeDays} day(s)</td><td><button class="ghost-btn" data-act="restore">Restore</button></td></tr>`;
+    }).join('');
+  }
+  async function onRestoreClick(e) {
+    const btn=e.target.closest('button[data-act="restore"]'); if(!btn) return;
+    const tr=btn.closest('tr'); const u=state.deleted.find(x=>x.id===tr.dataset.id); if(!u) return;
+    const ok=await confirmModal('Restore deleted guest?',`<p>Restore <strong>${escHtml(u.displayName||u.userPrincipalName)}</strong>? The account will be re-enabled and group memberships restored.</p>${Spo.isEnabled()?'<p class="notice notice-info">ℹ This action will be logged to the governance audit list.</p>':''}`, 'Restore');
+    if (!ok) return;
+    btn.disabled=true;
+    try {
+      await Graph.restoreUser(u.id);
+      await Spo.logAction({ action:'Restore', actionTaken:'Restored', guest:u, adminUpn:Auth.getAccount()?.username||'unknown' });
+      Log.info(`Restored ${u.userPrincipalName}`);
+      toast('Restored','ok');
+      await loadDeleted();
+    } catch(e) { Log.err('Restore failed:',e); toast('Restore failed: '+e.message,'err'); btn.disabled=false; }
+  }
+
+  // ── SETTINGS ─────────────────────────────────────────────────────────────────
+  function loadSettingsUI() {
+    const cfg=Spo.loadConfig();
+    document.getElementById('spoSiteUrl').value=cfg.siteUrl||'';
+    document.getElementById('spoExclusionList').value=cfg.exclusionList||'GuestExclusionList';
+    document.getElementById('spoAuditList').value=cfg.auditList||'GuestAuditLog';
+    document.getElementById('spoEnabled').checked=!!cfg.enabled;
+    document.getElementById('settingsClientId').value=Auth.getClientId()||'';
+    document.getElementById('clientIdInput').value=Auth.getClientId()||'';
+  }
+
+  async function onSpoSave() {
+    const siteUrl=document.getElementById('spoSiteUrl').value.trim();
+    const exclusionList=document.getElementById('spoExclusionList').value.trim()||'GuestExclusionList';
+    const auditList=document.getElementById('spoAuditList').value.trim()||'GuestAuditLog';
+    const enabled=document.getElementById('spoEnabled').checked;
+    const statusEl=document.getElementById('spoTestStatus');
+
+    Spo.saveConfig({ siteUrl, exclusionList, auditList, enabled });
+
+    if (!enabled) { updateSpoBadge(); statusEl.textContent='Integration disabled.'; return; }
+    if (!siteUrl) { toast('Enter a SharePoint site URL first.','warn'); return; }
+
+    statusEl.textContent='Testing connection…';
+    const btn=document.getElementById('spoSaveBtn'); btn.disabled=true;
+    try {
+      const result=await Spo.testConnection(siteUrl, exclusionList, auditList);
+      statusEl.textContent=`✓ Connected. ${result.exclusionCount} item(s) on exclusion list.`;
+      toast('SPO connection OK','ok');
+      await loadSpoExclusions();
+    } catch(e) {
+      statusEl.textContent='✗ Failed: '+e.message;
+      toast('SPO connection failed: '+e.message,'err');
+      Log.err('SPO test failed:',e);
+    } finally { btn.disabled=false; }
+  }
+
+  function onSaveClientId() {
+    const id=document.getElementById('settingsClientId').value.trim();
+    if (!id) { toast('Enter a client ID','warn'); return; }
+    Auth.setClientId(id);
+    document.getElementById('clientIdInput').value=id;
+    toast('Client ID saved. Sign out and back in to apply.','ok');
+  }
+
+  // ── BOOT ─────────────────────────────────────────────────────────────────────
+  async function boot() {
+    initTheme();
+    loadSettingsUI();
+    document.getElementById('darkToggle').addEventListener('click', toggleTheme);
+    document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>activateTab(t.dataset.tab)));
+    document.getElementById('signInBtn').addEventListener('click', onSignIn);
+    document.getElementById('signOutBtn').addEventListener('click', onSignOut);
+    document.getElementById('loadGuestsBtn').addEventListener('click', loadGuests);
+    document.getElementById('loadDeletedBtn').addEventListener('click', loadDeleted);
+    ['search','minInactive','minAge','redemption','enabled','neverSignedIn','hideExcluded'].forEach(id=>{
+      document.getElementById(id).addEventListener('input', applyFilter);
+      document.getElementById(id).addEventListener('change', applyFilter);
+    });
+    document.querySelector('#guestsTable thead').addEventListener('click', onSortClick);
+    document.querySelector('#guestsTable tbody').addEventListener('change', onTableChange);
+    document.getElementById('selectAll').addEventListener('change', onSelectAll);
+    document.querySelector('#deletedTable tbody').addEventListener('click', onRestoreClick);
+    document.getElementById('disableBtn').addEventListener('click', onDisable);
+    document.getElementById('enableBtn').addEventListener('click', onEnable);
+    document.getElementById('deleteBtn').addEventListener('click', onDelete);
+    document.getElementById('exportXlsxBtn').addEventListener('click', onExportXlsx);
+    document.getElementById('exportCsvBtn').addEventListener('click', onExportCsv);
+    document.getElementById('clearLogBtn').addEventListener('click', ()=>Log.clear());
+    document.getElementById('verboseLog').addEventListener('change', e=>Log.setVerbose(e.target.checked));
+    document.getElementById('spoSaveBtn').addEventListener('click', onSpoSave);
+    document.getElementById('saveClientIdBtn').addEventListener('click', onSaveClientId);
+
+    updateSpoBadge();
+
+    try {
+      await Auth.init();
+      Log.info('InactiveGuests ready.');
+      await refreshAuthUI();
+      if (Auth.getAccount()) await loadSpoExclusions();
+    } catch(e) {
+      // Not fatal on boot — user may not have set client ID yet
+      Log.warn('Boot auth init:', e.message);
+      await refreshAuthUI();
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', boot);
+})();
+</script>
+</body>
+</html>
