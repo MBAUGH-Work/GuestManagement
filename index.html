@@ -124,10 +124,10 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 <!-- ── TOPBAR ──────────────────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="brand">
-    <div class="logo">IG</div>
+    <div id="topbarLogo" class="logo">IG</div>
     <div>
-      <h1>InactiveGuests</h1>
-      <p class="subtitle">Find and clean up dormant guest accounts in Entra</p>
+      <h1 id="topbarAppName">Guest Manager</h1>
+      <p class="subtitle" id="topbarSubtitle">Inactive guest account management</p>
     </div>
   </div>
   <div class="topbar-actions">
@@ -141,7 +141,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 </header>
 
 <!-- ── TABS ────────────────────────────────────────────────────────────────── -->
-<nav class="tabs">
+<nav class="tabs" id="mainNav" style="display:none">
   <button class="tab active" data-tab="browse">1. Browse guests</button>
   <button class="tab" data-tab="recycle">2. Recycle bin</button>
   <button class="tab" data-tab="settings">⚙ Settings</button>
@@ -154,28 +154,18 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
   <!-- ── BROWSE ─────────────────────────────────────────────────────────────── -->
   <section class="tab-panel active" id="tab-browse">
 
-    <!-- sign-in card -->
-    <div class="card" id="connectCard">
-      <h2>Connect to your tenant</h2>
-      <p>InactiveGuests runs entirely in your browser. It signs you in with Microsoft (PKCE) and queries Microsoft Graph as you. No backend, no data leaves your browser.</p>
-      <p><strong>Required delegated permissions:</strong></p>
-      <ul>
-        <li><code>User.Read.All</code> – list guest users</li>
-        <li><code>AuditLog.Read.All</code> – read sign-in activity</li>
-        <li><code>Directory.Read.All</code> – list deleted users</li>
-        <li><code>User.Read</code> – sign-in identity</li>
-        <li><code>User.ReadWrite.All</code> + <code>Directory.AccessAsUser.All</code> <span class="muted">(only when you disable, delete or restore)</span></li>
-        <li><code>Sites.ReadWrite.All</code> <span class="muted">(only when SPO governance integration is enabled)</span></li>
-      </ul>
-      <p>To act on guests you also need <strong>User Administrator</strong> or <strong>Global Administrator</strong> in Entra.</p>
-
-      <div style="margin-bottom:14px;display:none">
-        <label style="font-weight:600;display:block;margin-bottom:6px">App Client ID</label>
-        <input type="text" id="clientIdInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:340px;font-family:monospace" />
-        <p class="muted small" style="margin:4px 0 0">Your Entra app registration client ID. Stored in localStorage.</p>
+    <!-- sign-in card — shown only when not signed in -->
+    <div id="connectCard" style="display:flex;align-items:center;justify-content:center;min-height:60vh">
+      <div style="text-align:center;max-width:360px">
+        <div id="signInLogo" style="margin:0 auto 20px;width:64px;height:64px">
+          <!-- Populated by boot() from AppConfig.LOGO_URL -->
+          <div class="logo" style="width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,var(--accent),#1a8cff);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;letter-spacing:1px">IG</div>
+        </div>
+        <h2 id="signInAppName" style="margin-bottom:8px">Guest Manager</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:28px">Sign in with your organisational account to continue.</p>
+        <button id="signInBtn" class="primary-btn" style="width:100%;padding:12px 24px;font-size:14px">Sign in with Microsoft</button>
+        <input type="text" id="clientIdInput" style="display:none" />
       </div>
-
-      <button id="signInBtn" class="primary-btn">Sign in with Microsoft</button>
     </div>
 
     <!-- browse card (shown after sign-in) -->
@@ -218,6 +208,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
           <option value="signed">Has signed in</option>
         </select>
         <label class="checkbox"><input type="checkbox" id="hideExcluded" checked/> Hide excluded</label>
+        <button id="fetchSponsorsBtn" class="ghost-btn" title="Fetch the internal sponsor for each guest (one Graph call per guest — may be slow for large tenants)">+ Fetch sponsors</button>
       </div>
 
       <p id="ownerNotice" class="notice notice-info hidden">
@@ -231,7 +222,9 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
             <tr>
               <th><input type="checkbox" id="selectAll" /></th>
               <th data-sort="displayName">Display name</th>
-              <th data-sort="userPrincipalName">UPN</th>
+              <th data-sort="mail">Email</th>
+              <th data-sort="companyName">Company</th>
+              <th data-sort="sponsorEmail">Sponsor</th>
               <th data-sort="redemptionState">Redemption</th>
               <th data-sort="accountEnabled">Enabled</th>
               <th data-sort="createdDateTime">Created</th>
@@ -307,6 +300,12 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
         <div>
           <label style="font-weight:600;display:block;margin-bottom:4px">Audit log list name</label>
           <input type="text" id="spoAuditList" placeholder="GuestAuditLog" style="width:100%" />
+        </div>
+
+        <div>
+          <label style="font-weight:600;display:block;margin-bottom:4px">Export library name</label>
+          <input type="text" id="spoExportLibrary" placeholder="GuestExports" style="width:100%" />
+          <p class="muted small" style="margin:3px 0 0">Document library where CSV exports are saved. Created automatically if it does not exist.</p>
         </div>
 
         <div>
@@ -417,26 +416,57 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════════
-   ACCESS CONTROL CONFIG
-   ─────────────────────────────────────────────────────────────────────────────
-   EDIT THESE VALUES before deploying:
+   ██████╗ ██████╗ ███╗   ██╗███████╗██╗ ██████╗
+  ██╔════╝██╔═══██╗████╗  ██║██╔════╝██║██╔════╝
+  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║██║  ███╗
+  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║██║   ██║
+  ╚██████╗╚██████╔╝██║ ╚████║██║     ██║╚██████╔╝
+   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚═╝ ╚═════╝
 
-   ALLOWED_GROUP_ID      – Object ID of the Entra group whose members can use
-                           the tool. Set to '' to allow all authenticated users.
+  ALL CONFIGURATION IS HERE — edit this block only.
+  No other changes needed for standard deployments.
+  ═══════════════════════════════════════════════════════════════════════════════ */
+window.AppConfig = {
 
-   SETTINGS_GROUP_ID     – Object ID of the Entra group whose members can see
-                           and edit the Settings tab (e.g. your IT admins group).
-                           Set to '' to allow all authenticated users to see Settings.
+  // ── BRANDING ─────────────────────────────────────────────────────────────────
+  APP_NAME:    'Guest Manager',
+  APP_SUBTITLE:'Inactive Guest Account Management',
+  LOGO_URL:    'https://sgm36external.blob.core.windows.net/$web/OPPD-Color.png',   // URL to your org logo image. Leave '' to use the default IG text logo.
+                     // e.g. 'https://yourorg.sharepoint.com/sites/branding/logo.png'
+  LOGO_ALT:    'Organisation logo',
 
-   SETTINGS_OWNERS       – Optional list of individual UPNs who can see Settings,
-                           in addition to SETTINGS_GROUP_ID members.
-                           Leave empty if using SETTINGS_GROUP_ID only.
-   ═══════════════════════════════════════════════════════════════════════════════ */
+  // ── ENTRA APP REGISTRATION ────────────────────────────────────────────────────
+  CLIENT_ID:   '807f98ab-e4ca-49ae-92cc-5fe1084b01d7',
+
+  // ── ACCESS CONTROL ────────────────────────────────────────────────────────────
+  // Object ID of the Entra group whose members can use the tool.
+  // Set to '' to allow all authenticated users (not recommended for production).
+  ALLOWED_GROUP_ID:  '3cccb4f9-bbc8-45a4-852d-f0143108b932',
+
+  // Object ID of the Entra group whose members can see and edit the Settings tab.
+  // Set to '' to allow all authenticated users to see Settings.
+  SETTINGS_GROUP_ID: 'edcabd65-0536-41e7-b3f4-4a406096cd3c',
+
+  // Optional individual UPNs who can see Settings, in addition to SETTINGS_GROUP_ID.
+  SETTINGS_OWNERS:   [],  // e.g. ['admin@yourorg.com', 'itsec@yourorg.com']
+
+  // ── SHAREPOINT DEFAULTS ───────────────────────────────────────────────────────
+  // These pre-populate the Settings tab. Users with Settings access can override them.
+  // Set SPO_SITE_URL to pre-fill the site — saves the Settings step for most deployments.
+  SPO_SITE_URL:       '',  // e.g. 'https://yourorg.sharepoint.com/sites/ITGovernance'
+  SPO_EXCLUSION_LIST: 'GuestExclusionList',
+  SPO_AUDIT_LIST:     'GuestAuditLog',
+  SPO_EXPORT_LIBRARY: 'GuestExports',
+  SPO_ENABLED:        false,  // Set to true to enable SPO integration by default
+
+};
+
+// Backwards-compat alias — internal code references window.AccessControl
 window.AccessControl = {
-  ALLOWED_GROUP_ID:  '3cccb4f9-bbc8-45a4-852d-f0143108b932',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-  SETTINGS_GROUP_ID: 'edcabd65-0536-41e7-b3f4-4a406096cd3c',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-  SETTINGS_OWNERS:   [],      // e.g. ['admin@yourorg.com']
-  CLIENT_ID:         '807f98ab-e4ca-49ae-92cc-5fe1084b01d7',
+  ALLOWED_GROUP_ID:  window.AppConfig.ALLOWED_GROUP_ID,
+  SETTINGS_GROUP_ID: window.AppConfig.SETTINGS_GROUP_ID,
+  SETTINGS_OWNERS:   window.AppConfig.SETTINGS_OWNERS,
+  CLIENT_ID:         window.AppConfig.CLIENT_ID,
 };
 
 (() => {
@@ -718,21 +748,48 @@ window.AccessControl = {
   function saveConfig(cfg) { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
 
   // Runtime state (populated on first use)
-  const _cache = { siteId:null, exclusionListId:null, auditListId:null, exclusions:null };
+  const _cache = { siteId:null, exclusionListId:null, auditListId:null, exportLibraryId:null, exclusions:null };
 
   function isEnabled() {
     const c = loadConfig();
     return !!(c.enabled && c.siteUrl && c.exclusionList && c.auditList);
   }
 
+  function getExportLibrary() {
+    return loadConfig().exportLibrary || window.AppConfig?.SPO_EXPORT_LIBRARY || 'GuestExports';
+  }
+
   async function _ensureIds() {
     if (_cache.siteId) return;
     const c = loadConfig();
     Log.info('SPO: resolving site and list IDs…');
-    _cache.siteId = await Graph.getSpoSiteId(c.siteUrl);
+    _cache.siteId          = await Graph.getSpoSiteId(c.siteUrl);
     _cache.exclusionListId = await Graph.getSpoListId(_cache.siteId, c.exclusionList);
     _cache.auditListId     = await Graph.getSpoListId(_cache.siteId, c.auditList);
     Log.info(`SPO: siteId=${_cache.siteId}`);
+  }
+
+  async function _ensureExportLibraryId() {
+    if (_cache.exportLibraryId) return;
+    if (!_cache.siteId) await _ensureIds();
+    const libraryName = getExportLibrary();
+    try {
+      _cache.exportLibraryId = await Graph.getSpoListId(_cache.siteId, libraryName);
+      Log.info(`SPO: export library resolved: ${libraryName}`);
+    } catch {
+      // Library doesn't exist — create it
+      Log.info(`SPO: creating export library "${libraryName}"…`);
+      const token = await Auth.getSpoToken();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${_cache.siteId}/lists`, {
+        method: 'POST',
+        headers: { Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({ displayName: libraryName, list: { template: 'documentLibrary' } })
+      });
+      if (!res.ok) throw new Error(`Could not create library "${libraryName}": ${res.status}`);
+      const data = await res.json();
+      _cache.exportLibraryId = data.id;
+      Log.info(`SPO: export library created: ${libraryName}`);
+    }
   }
 
   // Returns a Set of excluded emails (lowercased), objectIds, and domains
@@ -790,12 +847,44 @@ window.AccessControl = {
     }
   }
 
+  // Upload a CSV string to the GuestExports document library
+  async function uploadCsv(csvContent, filename) {
+    await _ensureExportLibraryId();
+    const c = loadConfig();
+    const token = await Auth.getSpoToken();
+    // Use the drive endpoint to upload — cleaner than the lists endpoint for files
+    const siteId = _cache.siteId;
+    // Get the drive ID for the library
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${_cache.exportLibraryId}/drive`,
+      { headers: { Authorization:`Bearer ${token}` } }
+    );
+    if (!driveRes.ok) throw new Error(`Could not get drive for export library: ${driveRes.status}`);
+    const drive = await driveRes.json();
+    const driveId = drive.id;
+
+    // Upload file to root of the library
+    const uploadRes = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encodeURIComponent(filename)}:/content`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'text/csv',
+        },
+        body: csvContent
+      }
+    );
+    if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+    const uploaded = await uploadRes.json();
+    Log.info(`SPO export: uploaded ${filename} → ${uploaded.webUrl}`);
+    return uploaded.webUrl;
+  }
+
   // Test connection: resolve IDs and load a handful of exclusion items
   async function testConnection(siteUrl, exclusionList, auditList) {
-    // Reset cache so we re-resolve with potentially new URLs
-    _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null;
+    _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null; _cache.exportLibraryId = null;
     const tmpCfg = loadConfig();
-    // Temporarily override for the test
     const saved = { ...tmpCfg };
     saveConfig({ ...tmpCfg, siteUrl, exclusionList, auditList, enabled: true });
     try {
@@ -803,14 +892,13 @@ window.AccessControl = {
       const items = await Graph.getSpoListItems(_cache.siteId, _cache.exclusionListId, ['GuestEmail','ObjectId']);
       return { ok: true, exclusionCount: items.length };
     } catch (e) {
-      // Restore cache reset
-      _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null;
+      _cache.siteId = null; _cache.exclusionListId = null; _cache.auditListId = null; _cache.exportLibraryId = null;
       saveConfig(saved);
       throw e;
     }
   }
 
-  window.Spo = { loadConfig, saveConfig, isEnabled, loadExclusions, isExcluded, logAction, testConnection };
+  window.Spo = { loadConfig, saveConfig, isEnabled, loadExclusions, isExcluded, logAction, uploadCsv, testConnection, getExportLibrary };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -834,8 +922,26 @@ window.AccessControl = {
       accountAgeDays, neverSignedIn:!last,
       redemptionState: user.externalUserState==='PendingAcceptance' ? 'PendingAcceptance' : user.externalUserState==='Accepted' ? 'Accepted' : 'Unknown' };
   }
+  function extractRealEmail(upn) {
+    // Guest UPNs look like: firstname.lastname_domain.com#EXT#@tenant.onmicrosoft.com
+    // Extract the real email from the UPN prefix before #EXT#
+    if (!upn) return '';
+    const extIdx = upn.indexOf('#EXT#');
+    if (extIdx === -1) return upn;
+    // Replace the last underscore before #EXT# with @ to reconstruct the email
+    const prefix = upn.substring(0, extIdx);
+    const lastUnderscore = prefix.lastIndexOf('_');
+    if (lastUnderscore === -1) return prefix;
+    return prefix.substring(0, lastUnderscore) + '@' + prefix.substring(lastUnderscore + 1);
+  }
+
   function passesFilter(g, f) {
-    if (f.search) { const q=f.search.toLowerCase(); const hay=`${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}`.toLowerCase(); if(!hay.includes(q)) return false; }
+    if (f.search) {
+      const q = f.search.toLowerCase();
+      const realEmail = extractRealEmail(g.userPrincipalName).toLowerCase();
+      const hay = `${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}\n${realEmail}\n${g.sponsorEmail||''}\n${g.sponsorName||''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     if (f.redemption&&f.redemption!=='any'&&g.redemptionState!==f.redemption) return false;
     if (f.enabled==='enabled'&&!g.accountEnabled) return false;
     if (f.enabled==='disabled'&&g.accountEnabled) return false;
@@ -846,7 +952,7 @@ window.AccessControl = {
     return true;
   }
   function fmtDate(d) { if(!d) return ''; const dt=d instanceof Date?d:new Date(d); if(isNaN(dt)) return ''; return dt.toISOString().substring(0,10); }
-  window.Guests = { lastSignInDate, daysBetween, enrich, passesFilter, fmtDate };
+  window.Guests = { lastSignInDate, daysBetween, enrich, passesFilter, fmtDate, extractRealEmail };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -855,7 +961,8 @@ window.AccessControl = {
 (() => {
   const COLS = [
     {key:'displayName',label:'Display name'},{key:'userPrincipalName',label:'UPN'},{key:'mail',label:'Mail'},
-    {key:'companyName',label:'Company'},{key:'accountEnabled',label:'Enabled'},{key:'redemptionState',label:'Redemption'},
+    {key:'companyName',label:'Company'},{key:'sponsorEmail',label:'Sponsor email'},{key:'sponsorName',label:'Sponsor name'},
+    {key:'accountEnabled',label:'Enabled'},{key:'redemptionState',label:'Redemption'},
     {key:'createdDateTime',label:'Created'},{key:'accountAgeDays',label:'Age (days)'},
     {key:'lastSignIn',label:'Last sign-in'},{key:'inactiveDays',label:'Inactive (days)'},
     {key:'excluded',label:'Excluded'},{key:'id',label:'Object id'},
@@ -882,15 +989,25 @@ window.AccessControl = {
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rowsFor(guests)),'Guests');
     XLSX.writeFile(wb,filename);
   }
-  function exportCsv(guests,filename='inactive-guests.csv') {
-    const rows=rowsFor(guests); if(!rows.length) return;
-    const headers=Object.keys(rows[0]);
-    const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
-    const csv=[headers.join(','),...rows.map(r=>headers.map(h=>esc(r[h])).join(','))].join('\r\n');
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  function buildCsv(guests) {
+    const rows = rowsFor(guests);
+    if (!rows.length) return '';
+    const headers = Object.keys(rows[0]);
+    const esc = v => { const s=String(v==null?'':v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
+    return [headers.join(','), ...rows.map(r=>headers.map(h=>esc(r[h])).join(','))].join('\r\n');
+  }
+
+  function downloadCsv(csvContent, filename='inactive-guests.csv') {
+    if (!csvContent) return;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csvContent],{type:'text/csv;charset=utf-8'}));
     a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),0);
   }
-  window.Export = { exportXlsx, exportCsv };
+
+  function exportCsv(guests, filename='inactive-guests.csv') {
+    downloadCsv(buildCsv(guests), filename);
+  }
+  window.Export = { exportXlsx, exportCsv, buildCsv, downloadCsv };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -983,11 +1100,17 @@ window.AccessControl = {
 
   // ── AUTH UI ──────────────────────────────────────────────────────────────────
   async function refreshAuthUI() {
-    const acc=Auth.getAccount();
-    document.getElementById('userBox').classList.toggle('hidden',!acc);
-    if (acc) document.getElementById('userName').textContent=acc.username||acc.name||'Signed in';
-    document.getElementById('connectCard').classList.toggle('hidden',!!acc);
-    document.getElementById('browseCard').classList.toggle('hidden',!acc);
+    const acc = Auth.getAccount();
+    const signedIn = !!acc;
+    document.getElementById('userBox').classList.toggle('hidden', !signedIn);
+    if (acc) document.getElementById('userName').textContent = acc.username || acc.name || 'Signed in';
+    // Sign-in card: visible only when not signed in
+    const connectCard = document.getElementById('connectCard');
+    connectCard.style.display = signedIn ? 'none' : '';
+    // Browse card and nav: visible only when signed in
+    document.getElementById('browseCard').classList.toggle('hidden', !signedIn);
+    document.getElementById('mainNav').style.display = signedIn ? '' : 'none';
+    // Dark toggle: always visible, SPO badge: always visible
   }
   async function onSignIn() {
     const clientId=document.getElementById('clientIdInput').value.trim();
@@ -1102,6 +1225,9 @@ window.AccessControl = {
     const {col,dir}=state.sort; const m=dir==='asc'?1:-1;
     const k=g=>{ switch(col){
       case 'displayName': return (g.displayName||'').toLowerCase();
+      case 'mail': return (g.mail||Guests.extractRealEmail(g.userPrincipalName)||'').toLowerCase();
+      case 'companyName': return (g.companyName||'').toLowerCase();
+      case 'sponsorEmail': return (g.sponsorEmail||'').toLowerCase();
       case 'userPrincipalName': return (g.userPrincipalName||'').toLowerCase();
       case 'redemptionState': return g.redemptionState||'';
       case 'accountEnabled': return g.accountEnabled?1:0;
@@ -1130,18 +1256,22 @@ window.AccessControl = {
     wrap.classList.remove('hidden'); hint.classList.remove('hidden'); bar.classList.remove('hidden');
     const rows=sortGuests(state.filtered).slice(0,1000);
     hint.textContent=`${state.filtered.length} match${state.filtered.length===1?'':'es'}`+(state.filtered.length>rows.length?` (showing first ${rows.length})`:'');
-    tbody.innerHTML=rows.map(g=>`
+    tbody.innerHTML=rows.map(g=>{
+      const realEmail = g.mail || Guests.extractRealEmail(g.userPrincipalName) || '';
+      return `
       <tr data-id="${escAttr(g.id)}"${g.excluded?' class="excluded-row"':''}>
         <td><input type="checkbox" data-act="sel" ${state.selected.has(g.id)?'checked':''} ${g.excluded?'disabled':''}/></td>
-        <td><strong>${escHtml(g.displayName||'(no name)')}</strong>${g.companyName?`<br><span class="muted small">${escHtml(g.companyName)}</span>`:''}</td>
-        <td><code>${escHtml(g.userPrincipalName||'')}</code>${g.mail&&g.mail!==g.userPrincipalName?`<br><span class="muted small">${escHtml(g.mail)}</span>`:''}</td>
+        <td><strong>${escHtml(g.displayName||'(no name)')}</strong><br><span class="muted small">${escHtml(g.userPrincipalName||'')}</span></td>
+        <td>${escHtml(realEmail)}</td>
+        <td>${escHtml(g.companyName||'')}</td>
+        <td>${g.sponsorEmail?`${escHtml(g.sponsorName||g.sponsorEmail)}<br><span class="muted small">${escHtml(g.sponsorEmail)}</span>`:'<span class="muted small">—</span>'}</td>
         <td>${escHtml(g.redemptionState)}</td>
         <td>${g.accountEnabled?'Yes':'<span class="muted">No</span>'}</td>
         <td>${escHtml(Guests.fmtDate(g.createdDateTime))}<br><span class="muted small">${g.accountAgeDays!=null?g.accountAgeDays+' days':''}</span></td>
         <td>${g.lastSignIn?escHtml(Guests.fmtDate(g.lastSignIn)):'<span class="muted">Never</span>'}</td>
         <td>${g.inactiveDays==null?'':g.inactiveDays+' days'}</td>
         <td>${governanceBadge(g)}</td>
-      </tr>`).join('');
+      </tr>`;}).join('');
     document.querySelectorAll('#guestsTable thead th').forEach(th=>{ th.classList.remove('sort-asc','sort-desc','sortable-col'); if(th.dataset.sort){th.classList.add('sortable-col');if(th.dataset.sort===state.sort.col)th.classList.add(state.sort.dir==='asc'?'sort-asc':'sort-desc');} });
     updateSelCount();
     document.getElementById('selectAll').checked=rows.length>0&&rows.every(g=>state.selected.has(g.id)||g.excluded);
@@ -1152,6 +1282,12 @@ window.AccessControl = {
     const sel=state.selected.size;
     ['disableBtn','enableBtn','deleteBtn'].forEach(id=>document.getElementById(id).disabled=sel===0);
     ['exportXlsxBtn','exportCsvBtn'].forEach(id=>document.getElementById(id).disabled=state.filtered.length===0);
+    // Update CSV button label to show destination
+    const csvBtn = document.getElementById('exportCsvBtn');
+    csvBtn.textContent = Spo.isEnabled() ? `Export CSV → SPO` : 'Export CSV';
+    csvBtn.title = Spo.isEnabled()
+      ? `Upload CSV to SharePoint ${Spo.getExportLibrary()} library (no local download)`
+      : 'Download CSV to local machine';
   }
 
   function onTableChange(e) {
@@ -1236,11 +1372,73 @@ window.AccessControl = {
     await loadGuests();
   }
 
+  // ── FETCH SPONSORS ────────────────────────────────────────────────────────────
+  async function fetchSponsors() {
+    if (!state.guests.length) { toast('Load guests first','warn'); return; }
+    const btn = document.getElementById('fetchSponsorsBtn');
+    btn.disabled = true; btn.textContent = 'Fetching sponsors…';
+    let done = 0;
+    const total = state.guests.length;
+    await Concurrency.pmap(state.guests, async (g) => {
+      try {
+        const ref = await Graph.call(
+          `https://graph.microsoft.com/v1.0/users/${g.id}/invitedBy?$select=mail,displayName`,
+          { write: false }
+        );
+        g.sponsorEmail = ref?.mail || ref?.userPrincipalName || '';
+        g.sponsorName  = ref?.displayName || '';
+      } catch { g.sponsorEmail = ''; g.sponsorName = ''; }
+      finally {
+        done++;
+        btn.textContent = `Fetching sponsors… ${done}/${total}`;
+      }
+    }, { concurrency: 5 });
+    btn.disabled = false;
+    btn.textContent = '✓ Sponsors loaded';
+    applyFilter();
+    toast(`Sponsors loaded for ${total} guests`, 'ok');
+  }
+
   function onDisable() { return bulkAction('Disable', g=>Graph.disableUser(g.id)); }
   function onEnable()  { return bulkAction('Enable',  g=>Graph.enableUser(g.id)); }
   function onDelete()  { return bulkAction('Delete',  g=>Graph.deleteUser(g.id), true); }
-  function onExportXlsx() { return Export.exportXlsx(state.filtered,`inactive-guests-${new Date().toISOString().substring(0,10)}.xlsx`); }
-  function onExportCsv()  { return Export.exportCsv(state.filtered, `inactive-guests-${new Date().toISOString().substring(0,10)}.csv`); }
+  function onExportXlsx() {
+    // XLSX always downloads locally — SPO only supports CSV upload via Graph PUT
+    return Export.exportXlsx(state.filtered,`inactive-guests-${new Date().toISOString().substring(0,10)}.xlsx`);
+  }
+
+  async function onExportCsv() {
+    const filename = `inactive-guests-${new Date().toISOString().substring(0,10)}-${new Date().toTimeString().substring(0,5).replace(':','')}UTC.csv`;
+    const csvContent = Export.buildCsv(state.filtered);
+
+    if (Spo.isEnabled()) {
+      // Upload to SharePoint — no local file
+      const btn = document.getElementById('exportCsvBtn');
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = 'Uploading…';
+      try {
+        const url = await Spo.uploadCsv(csvContent, filename);
+        toast(`✓ Saved to SharePoint: ${filename}`, 'ok');
+        // Show a brief link in the action results area
+        const resultsEl = document.getElementById('actionResults');
+        resultsEl.classList.remove('hidden');
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="ok-mark">✓</span> Export saved to SharePoint GuestExports library: <a href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(filename)}</a>`;
+        resultsEl.appendChild(li);
+      } catch(e) {
+        Log.err('SPO export upload failed:', e);
+        toast('SPO upload failed — downloading locally instead', 'warn');
+        Export.downloadCsv(csvContent, filename);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    } else {
+      // SPO not configured — download locally
+      Export.downloadCsv(csvContent, filename);
+    }
+  }
 
   // ── RECYCLE BIN ──────────────────────────────────────────────────────────────
   async function loadDeleted() {
@@ -1282,23 +1480,26 @@ window.AccessControl = {
 
   // ── SETTINGS ─────────────────────────────────────────────────────────────────
   function loadSettingsUI() {
-    const cfg=Spo.loadConfig();
-    document.getElementById('spoSiteUrl').value=cfg.siteUrl||'';
-    document.getElementById('spoExclusionList').value=cfg.exclusionList||'GuestExclusionList';
-    document.getElementById('spoAuditList').value=cfg.auditList||'GuestAuditLog';
-    document.getElementById('spoEnabled').checked=!!cfg.enabled;
-    document.getElementById('settingsClientId').value=Auth.getClientId()||'';
-    document.getElementById('clientIdInput').value=Auth.getClientId()||'';
+    const cfg = Spo.loadConfig();
+    const ac  = window.AppConfig;
+    document.getElementById('spoSiteUrl').value        = cfg.siteUrl        || ac.SPO_SITE_URL       || '';
+    document.getElementById('spoExclusionList').value  = cfg.exclusionList  || ac.SPO_EXCLUSION_LIST || 'GuestExclusionList';
+    document.getElementById('spoAuditList').value      = cfg.auditList      || ac.SPO_AUDIT_LIST     || 'GuestAuditLog';
+    document.getElementById('spoExportLibrary').value  = cfg.exportLibrary  || ac.SPO_EXPORT_LIBRARY || 'GuestExports';
+    document.getElementById('spoEnabled').checked      = cfg.enabled !== undefined ? cfg.enabled : (ac.SPO_ENABLED || false);
+    document.getElementById('settingsClientId').value  = Auth.getClientId() || '';
+    document.getElementById('clientIdInput').value     = Auth.getClientId() || '';
   }
 
   async function onSpoSave() {
     const siteUrl=document.getElementById('spoSiteUrl').value.trim();
     const exclusionList=document.getElementById('spoExclusionList').value.trim()||'GuestExclusionList';
     const auditList=document.getElementById('spoAuditList').value.trim()||'GuestAuditLog';
+    const exportLibrary=document.getElementById('spoExportLibrary').value.trim()||'GuestExports';
     const enabled=document.getElementById('spoEnabled').checked;
     const statusEl=document.getElementById('spoTestStatus');
 
-    Spo.saveConfig({ siteUrl, exclusionList, auditList, enabled });
+    Spo.saveConfig({ siteUrl, exclusionList, auditList, exportLibrary, enabled });
 
     if (!enabled) { updateSpoBadge(); statusEl.textContent='Integration disabled.'; return; }
     if (!siteUrl) { toast('Enter a SharePoint site URL first.','warn'); return; }
@@ -1325,8 +1526,37 @@ window.AccessControl = {
     toast('Client ID saved. Sign out and back in to apply.','ok');
   }
 
+  // ── BRANDING ──────────────────────────────────────────────────────────────────
+  function applyBranding() {
+    const ac = window.AppConfig || {};
+    const name     = ac.APP_NAME    || 'Guest Manager';
+    const subtitle = ac.APP_SUBTITLE|| 'Inactive guest account management';
+    const logoUrl  = ac.LOGO_URL    || '';
+    const logoAlt  = ac.LOGO_ALT    || 'Logo';
+
+    // Page title
+    document.title = name;
+
+    // Topbar
+    document.getElementById('topbarAppName').textContent  = name;
+    document.getElementById('topbarSubtitle').textContent = subtitle;
+
+    // Sign-in card
+    document.getElementById('signInAppName').textContent  = name;
+
+    // Logo — topbar and sign-in card
+    if (logoUrl) {
+      const img = `<img src="${logoUrl}" alt="${logoAlt}" style="width:100%;height:100%;object-fit:contain;border-radius:10px">`;
+      document.getElementById('topbarLogo').innerHTML = img;
+      document.getElementById('topbarLogo').style.background = 'transparent';
+      document.getElementById('signInLogo').innerHTML =
+        `<img src="${logoUrl}" alt="${logoAlt}" style="max-width:120px;max-height:64px;object-fit:contain">`;
+    }
+  }
+
   // ── BOOT ─────────────────────────────────────────────────────────────────────
   async function boot() {
+    applyBranding();
     initTheme();
     loadSettingsUI();
     document.getElementById('darkToggle').addEventListener('click', toggleTheme);
@@ -1352,6 +1582,7 @@ window.AccessControl = {
     document.getElementById('verboseLog').addEventListener('change', e=>Log.setVerbose(e.target.checked));
     document.getElementById('spoSaveBtn').addEventListener('click', onSpoSave);
     document.getElementById('saveClientIdBtn').addEventListener('click', onSaveClientId);
+    document.getElementById('fetchSponsorsBtn').addEventListener('click', fetchSponsors);
 
     updateSpoBadge();
 
