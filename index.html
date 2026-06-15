@@ -429,7 +429,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.0.3',   // ← bump this every time you deploy a new version
+  VERSION: '1.0.4',   // ← bump this every time you deploy a new version
 
   // ── BRANDING ─────────────────────────────────────────────────────────────────
   APP_NAME:    'Guest Manager',
@@ -716,12 +716,17 @@ window.AccessControl = {
   async function checkGroupMembership(groupId) {
     if (!groupId || groupId.trim() === '') return true;
     try {
-      // transitiveMemberOf catches nested group membership
-      const result = await call(
-        `${V1}/me/transitiveMemberOf/microsoft.graph.group?$select=id&$filter=id eq '${groupId}'`,
-        { headers: { ConsistencyLevel: 'eventual' } }
-      );
-      return Array.isArray(result?.value) && result.value.length > 0;
+      // Fetch all transitive group memberships and check if target group is in the list
+      // Using $select=id only for efficiency — pages through if needed
+      let next = `${V1}/me/transitiveMemberOf?$select=id&$top=100`;
+      while (next) {
+        const result = await call(next);
+        if (Array.isArray(result?.value)) {
+          if (result.value.some(g => g.id === groupId)) return true;
+        }
+        next = result?.['@odata.nextLink'] || null;
+      }
+      return false;
     } catch (e) {
       Log.warn('Group membership check failed — failing open:', e.message);
       return true;
