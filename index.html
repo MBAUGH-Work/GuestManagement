@@ -679,25 +679,33 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     Log.info(`SPO: siteId=${_cache.siteId}`);
   }
 
-  // Returns a Set of excluded emails (lowercased) and a Set of excluded objectIds
+  // Returns a Set of excluded emails (lowercased), objectIds, and domains
   async function loadExclusions() {
-    if (!isEnabled()) return { emails: new Set(), objectIds: new Set(), raw: [] };
+    if (!isEnabled()) return { emails: new Set(), objectIds: new Set(), domains: new Set(), raw: [] };
     await _ensureIds();
     Log.info('SPO: loading exclusion list…');
-    const items = await Graph.getSpoListItems(_cache.siteId, _cache.exclusionListId, ['GuestEmail','ObjectId','Reason']);
+    const items = await Graph.getSpoListItems(_cache.siteId, _cache.exclusionListId, ['GuestEmail','ObjectId','DomainName','Reason']);
     _cache.exclusions = items;
     const emails    = new Set(items.map(i => (i.GuestEmail||'').toLowerCase().trim()).filter(Boolean));
     const objectIds = new Set(items.map(i => (i.ObjectId||'').trim()).filter(Boolean));
-    Log.info(`SPO: ${emails.size} excluded emails, ${objectIds.size} excluded objectIds`);
-    return { emails, objectIds, raw: items };
+    const domains   = new Set(items.map(i => (i.DomainName||'').toLowerCase().trim()).filter(Boolean));
+    Log.info(`SPO: ${emails.size} excluded emails, ${objectIds.size} excluded objectIds, ${domains.size} excluded domains`);
+    return { emails, objectIds, domains, raw: items };
   }
 
-  // Returns true if a guest is on the exclusion list
+  // Returns true if a guest is on the exclusion list (by ObjectId, email, or domain)
   function isExcluded(guest, exclusions) {
     if (!exclusions) return false;
     if (exclusions.objectIds.has(guest.id)) return true;
     const email = (guest.mail || guest.userPrincipalName || '').toLowerCase();
-    return exclusions.emails.has(email);
+    if (exclusions.emails.has(email)) return true;
+    // Domain check — extract domain from email
+    const atIdx = email.indexOf('@');
+    if (atIdx > -1) {
+      const domain = email.substring(atIdx + 1);
+      if (exclusions.domains.has(domain)) return true;
+    }
+    return false;
   }
 
   // Appends an audit record for an interactive action
