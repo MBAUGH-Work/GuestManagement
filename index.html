@@ -278,7 +278,11 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 
   <!-- ── SETTINGS ────────────────────────────────────────────────────────────── -->
   <section class="tab-panel" id="tab-settings">
-    <div class="card">
+    <div class="card" id="settingsOwnerNotice" style="display:none">
+      <p class="notice notice-warn">⚠ Settings are restricted to designated app owners. Contact your Identity team if you need to change the configuration.</p>
+    </div>
+    <div id="settingsContent">
+      <div class="card">
       <h2>SharePoint Governance Integration</h2>
       <p>When enabled, InactiveGuests will:</p>
       <ul>
@@ -329,6 +333,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
         <button id="saveClientIdBtn" class="ghost-btn" style="margin-top:10px">Save client ID</button>
       </div>
     </div>
+    </div><!-- end settingsContent -->
   </section>
 
   <!-- ── DEBUG ──────────────────────────────────────────────────────────────── -->
@@ -379,6 +384,17 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 
 </main>
 
+<!-- ── ACCESS DENIED SCREEN ───────────────────────────────────────────────── -->
+<div id="accessDenied" class="hidden" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:999;align-items:center;justify-content:center;flex-direction:column;gap:16px">
+  <div style="text-align:center;max-width:480px;padding:40px">
+    <div style="font-size:48px;margin-bottom:16px">🔒</div>
+    <h2 style="color:var(--navy,#1a2f4a);margin-bottom:8px">Access Denied</h2>
+    <p style="color:var(--muted,#607089)">Your account is not authorised to use this tool. Access is restricted to members of the Identity & Security governance group.</p>
+    <p style="color:var(--muted,#607089);font-size:13px">If you believe you should have access, contact your Identity team.</p>
+    <button id="accessDeniedSignOut" class="ghost-btn" style="margin-top:16px">Sign out</button>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <div id="confirmModal" class="modal hidden" role="dialog">
@@ -401,8 +417,26 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════════
-   LOG
+   ACCESS CONTROL CONFIG
+   ─────────────────────────────────────────────────────────────────────────────
+   EDIT THESE VALUES before deploying:
+
+   ALLOWED_GROUP_ID   – Object ID of the Entra group whose members can use the tool.
+                        Find it in Entra admin centre → Groups → your group → Overview.
+                        Set to '' to disable group enforcement (not recommended).
+
+   SETTINGS_OWNERS    – UPNs of users who can see and edit the Settings tab.
+                        Everyone else sees the tab hidden.
+                        Add your own UPN here.
    ═══════════════════════════════════════════════════════════════════════════════ */
+window.AccessControl = {
+  ALLOWED_GROUP_ID: '3cccb4f9-bbc8-45a4-852d-f0143108b932',           // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  SETTINGS_OWNERS:  ['mabaugh@oppd.com'             // e.g. 'admin@yourorg.com'
+    // 'admin@yourorg.com',
+    // 'identityadmin@yourorg.com',
+  ],
+};
+
 (() => {
   const state = { verbose: false, entries: [] };
   function format(level, args) {
@@ -642,10 +676,29 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
   function deleteUser(id)   { return call(`${V1}/users/${id}`, { method:'DELETE', write:true }); }
   function restoreUser(id)  { return call(`${V1}/directory/deletedItems/${id}/restore`, { method:'POST', write:true }); }
 
+  // Check if the signed-in user is a member of a specific group
+  async function checkGroupMembership(groupId) {
+    if (!groupId) return true; // No group configured — allow all
+    try {
+      const result = await call(`${V1}/me/checkMemberOf`, {
+        method: 'POST',
+        body: { groupIds: [groupId] },
+      });
+      return Array.isArray(result?.value) && result.value.includes(groupId);
+    } catch (e) {
+      Log.warn('Group membership check failed:', e.message);
+      // Fail open only if the error is a permission error (user may lack GroupMember.Read.All)
+      // In that case fall back to allowing access and rely on Entra app assignment
+      if (e.status === 403) return true;
+      return false;
+    }
+  }
+
   window.Graph = {
     call, listAllGuests, listDeletedGuests,
     getSpoSiteId, getSpoListId, getSpoListItems, addSpoListItem,
     disableUser, enableUser, deleteUser, restoreUser,
+    checkGroupMembership,
   };
 })();
 
@@ -883,6 +936,22 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     else { badge.className='spo-status warn'; badge.textContent='SPO: connecting…'; }
   }
 
+  // ── ACCESS CONTROL ────────────────────────────────────────────────────────────
+  function showAccessDenied() {
+    const el = document.getElementById('accessDenied');
+    el.style.display = 'flex';
+    el.classList.remove('hidden');
+    document.getElementById('accessDeniedSignOut').addEventListener('click', onSignOut);
+  }
+
+  function applySettingsOwnerRestriction(upn) {
+    const owners = window.AccessControl?.SETTINGS_OWNERS || [];
+    const isOwner = owners.length === 0 || owners.map(o=>o.toLowerCase()).includes((upn||'').toLowerCase());
+    document.getElementById('settingsContent').style.display = isOwner ? '' : 'none';
+    document.getElementById('settingsOwnerNotice').style.display = isOwner ? 'none' : '';
+    Log.info(`Settings access: ${isOwner ? 'owner' : 'restricted'} for ${upn}`);
+  }
+
   // ── AUTH UI ──────────────────────────────────────────────────────────────────
   async function refreshAuthUI() {
     const acc=Auth.getAccount();
@@ -897,7 +966,24 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     try {
       await Auth.init();
       await Auth.signIn();
+      const acc = Auth.getAccount();
+      if (!acc) return;
+
+      // ── Group membership check ──────────────────────────────────────────────
+      const groupId = window.AccessControl?.ALLOWED_GROUP_ID || '';
+      if (groupId) {
+        Log.info('Checking group membership…');
+        const isMember = await Graph.checkGroupMembership(groupId);
+        if (!isMember) {
+          Log.warn(`Access denied: ${acc.username} is not a member of group ${groupId}`);
+          showAccessDenied();
+          return;
+        }
+        Log.info(`Group membership confirmed for ${acc.username}`);
+      }
+
       await refreshAuthUI();
+      applySettingsOwnerRestriction(acc.username);
       await loadSpoExclusions();
     } catch (e) { Log.err('Sign-in failed:', e); toast('Sign-in failed: '+e.message,'err'); }
   }
@@ -1243,10 +1329,21 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     try {
       await Auth.init();
       Log.info('InactiveGuests ready.');
-      await refreshAuthUI();
-      if (Auth.getAccount()) await loadSpoExclusions();
+      const acc = Auth.getAccount();
+      if (acc) {
+        // Re-check group membership for returning signed-in users
+        const groupId = window.AccessControl?.ALLOWED_GROUP_ID || '';
+        if (groupId) {
+          const isMember = await Graph.checkGroupMembership(groupId);
+          if (!isMember) { showAccessDenied(); return; }
+        }
+        await refreshAuthUI();
+        applySettingsOwnerRestriction(acc.username);
+        await loadSpoExclusions();
+      } else {
+        await refreshAuthUI();
+      }
     } catch(e) {
-      // Not fatal on boot — user may not have set client ID yet
       Log.warn('Boot auth init:', e.message);
       await refreshAuthUI();
     }
