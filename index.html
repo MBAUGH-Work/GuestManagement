@@ -428,11 +428,13 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
   ═══════════════════════════════════════════════════════════════════════════════ */
 window.AppConfig = {
 
+  // ── VERSION ───────────────────────────────────────────────────────────────────
+  VERSION: '1.0.3',   // ← bump this every time you deploy a new version
+
   // ── BRANDING ─────────────────────────────────────────────────────────────────
   APP_NAME:    'Guest Manager',
   APP_SUBTITLE:'Inactive Guest Account Management',
-  LOGO_URL:    'https://sgm36external.blob.core.windows.net/$web/OPPD-Color.png',   // URL to your org logo image. Leave '' to use the default IG text logo.
-                     // e.g. 'https://yourorg.sharepoint.com/sites/branding/logo.png'
+  LOGO_URL:    'https://sgm36external.blob.core.windows.net/$web/OPPD-Color.png',
   LOGO_ALT:    'Organisation logo',
 
   // ── ENTRA APP REGISTRATION ────────────────────────────────────────────────────
@@ -1538,7 +1540,7 @@ window.AccessControl = {
 
     // Topbar
     document.getElementById('topbarAppName').textContent  = name;
-    document.getElementById('topbarSubtitle').textContent = subtitle;
+    document.getElementById('topbarSubtitle').textContent = subtitle + (ac.VERSION ? `  ·  v${ac.VERSION}` : '');
 
     // Sign-in card
     document.getElementById('signInAppName').textContent  = name;
@@ -1556,6 +1558,7 @@ window.AccessControl = {
   // ── BOOT ─────────────────────────────────────────────────────────────────────
   async function boot() {
     applyBranding();
+    Log.info(`InactiveGuests v${window.AppConfig?.VERSION || '?'} starting…`);
     initTheme();
     loadSettingsUI();
     document.getElementById('darkToggle').addEventListener('click', toggleTheme);
