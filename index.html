@@ -712,17 +712,16 @@ window.AccessControl = {
 
   // Check if the signed-in user is a member of a specific group
   async function checkGroupMembership(groupId) {
-    if (!groupId || groupId.trim() === '') return true; // No group configured — allow all
+    if (!groupId || groupId.trim() === '') return true;
     try {
-      const result = await call(`${V1}/me/checkMemberOf`, {
-        method: 'POST',
-        body: { groupIds: [groupId] },
-      });
-      return Array.isArray(result?.value) && result.value.includes(groupId);
+      // transitiveMemberOf catches nested group membership
+      const result = await call(
+        `${V1}/me/transitiveMemberOf/microsoft.graph.group?$select=id&$filter=id eq '${groupId}'`,
+        { headers: { ConsistencyLevel: 'eventual' } }
+      );
+      return Array.isArray(result?.value) && result.value.length > 0;
     } catch (e) {
       Log.warn('Group membership check failed — failing open:', e.message);
-      // Fail open on any error (missing permission, network, etc.)
-      // Rely on Entra app assignment as the hard gate instead
       return true;
     }
   }
