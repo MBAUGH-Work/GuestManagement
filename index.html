@@ -169,7 +169,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
       </ul>
       <p>To act on guests you also need <strong>User Administrator</strong> or <strong>Global Administrator</strong> in Entra.</p>
 
-      <div style="margin-bottom:14px">
+      <div style="margin-bottom:14px;display:none">
         <label style="font-weight:600;display:block;margin-bottom:6px">App Client ID</label>
         <input type="text" id="clientIdInput" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:340px;font-family:monospace" />
         <p class="muted small" style="margin:4px 0 0">Your Entra app registration client ID. Stored in localStorage.</p>
@@ -436,6 +436,7 @@ window.AccessControl = {
   ALLOWED_GROUP_ID:  '3cccb4f9-bbc8-45a4-852d-f0143108b932',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
   SETTINGS_GROUP_ID: 'edcabd65-0536-41e7-b3f4-4a406096cd3c',      // e.g. 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
   SETTINGS_OWNERS:   [],      // e.g. ['admin@yourorg.com']
+  CLIENT_ID:         '807f98ab-e4ca-49ae-92cc-5fe1084b01d7',
 };
 
 (() => {
@@ -514,7 +515,9 @@ window.AccessControl = {
   };
 
   function getClientId() {
-    return localStorage.getItem('ig-clientId') || '';
+    return localStorage.getItem('ig-clientId')
+        || window.AccessControl?.CLIENT_ID
+        || '';
   }
 
   async function init() {
@@ -989,7 +992,7 @@ window.AccessControl = {
   }
   async function onSignIn() {
     const clientId=document.getElementById('clientIdInput').value.trim();
-    if (clientId) Auth.setClientId(clientId);
+    if (clientId) Auth.setClientId(clientId); // only override if manually entered in settings
     try {
       await Auth.init();
       await Auth.signIn();
