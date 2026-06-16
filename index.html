@@ -172,8 +172,15 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
     <div class="card" id="browseCard" style="display:none">
       <h2>Guest users</h2>
       <div class="row">
-        <button id="loadGuestsBtn" class="primary-btn">Load all guests</button>
+        <button id="loadGuestsBtn" class="primary-btn">Load guests</button>
         <span id="loadStatus" class="muted"></span>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+          <span id="cacheStatusBadge" class="spo-status off" style="font-size:11px"></span>
+          <label class="checkbox" title="Cached: reads from SharePoint CSV (fast, includes sponsor data). Live: queries Graph directly (slow, real-time).">
+            <input type="checkbox" id="liveModeToggle" />
+            <span style="font-size:12px">Live mode</span>
+          </label>
+        </div>
       </div>
 
       <div id="progressBox" class="progress-box hidden">
@@ -215,6 +222,29 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
         Sign-in activity requires Entra ID P1 or P2. If "Last sign-in" is mostly empty the tool falls back to account creation date for inactivity.
       </p>
       <p id="exclusionNotice" class="notice notice-warn hidden"></p>
+
+      <!-- Summary counts bar -->
+      <div id="summaryBar" class="hidden" style="display:flex;gap:24px;padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:8px 0;flex-wrap:wrap;align-items:center">
+        <span style="font-size:13px;color:var(--muted)">
+          <strong id="countTotal" style="color:var(--text)">0</strong> total guests
+        </span>
+        <span style="color:var(--border)">|</span>
+        <span style="font-size:13px;color:var(--muted)">
+          <strong id="countFiltered" style="color:var(--accent)">0</strong> matching filters
+        </span>
+        <span style="color:var(--border)">|</span>
+        <span style="font-size:13px;color:var(--muted)">
+          <strong id="countExcluded" style="color:var(--muted)">0</strong> excluded
+        </span>
+        <span style="color:var(--border)">|</span>
+        <span style="font-size:13px;color:var(--muted)">
+          <strong id="countNeverSignedIn" style="color:var(--warn,#d97706)">0</strong> never signed in
+        </span>
+        <span style="color:var(--border)">|</span>
+        <span style="font-size:13px;color:var(--muted)">
+          <strong id="countSelected" style="color:var(--ok,#128d4f)">0</strong> selected
+        </span>
+      </div>
 
       <div id="tableWrap" class="table-wrap hidden">
         <table class="data-table sortable" id="guestsTable">
@@ -429,7 +459,15 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.0.6',   // ← bump this every time you deploy a new version
+  VERSION: '1.1.0',   // ← bump this every time you deploy a new version
+
+  // ── CACHE SETTINGS ────────────────────────────────────────────────────────────
+  // Name of the CSV file written by Invoke-GuestDataCollection.ps1
+  // Must match the $CsvFileName variable in that runbook.
+  CACHE_CSV_FILENAME:  'GuestData.csv',
+  CACHE_META_FILENAME: 'GuestData-meta.json',
+  // Default mode: 'cached' reads from SPO CSV, 'live' calls Graph directly
+  DEFAULT_DATA_MODE:   'cached',
 
   // ── BRANDING ─────────────────────────────────────────────────────────────────
   APP_NAME:    'Guest Manager',
@@ -904,7 +942,103 @@ window.AccessControl = {
     }
   }
 
-  window.Spo = { loadConfig, saveConfig, isEnabled, loadExclusions, isExcluded, logAction, uploadCsv, testConnection, getExportLibrary };
+  // Read the cache metadata — uses file lastModifiedDateTime as the authoritative timestamp
+  async function getCacheMeta() {
+    if (!isEnabled()) return null;
+    try {
+      await _ensureExportLibraryId();
+      const token = await Auth.getSpoToken();
+      const csvFile = window.AppConfig?.CACHE_CSV_FILENAME || 'GuestData.csv';
+
+      // Get the drive for the library
+      const driveRes = await fetch(
+        `https://graph.microsoft.com/v1.0/sites/${_cache.siteId}/lists/${_cache.exportLibraryId}/drive`,
+        { headers: { Authorization:`Bearer ${token}` } }
+      );
+      if (!driveRes.ok) return null;
+      const drive = await driveRes.json();
+
+      // Get file metadata — lastModifiedDateTime is when the file was actually written
+      const fileRes = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(csvFile)}`,
+        { headers: { Authorization:`Bearer ${token}` } }
+      );
+      if (!fileRes.ok) return null;
+      const fileMeta = await fileRes.json();
+
+      // Also try to read the meta JSON for guest count etc.
+      let extra = {};
+      try {
+        const metaFile = window.AppConfig?.CACHE_META_FILENAME || 'GuestData-meta.json';
+        const metaRes = await fetch(
+          `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(metaFile)}:/content`,
+          { headers: { Authorization:`Bearer ${token}` } }
+        );
+        if (metaRes.ok) extra = await metaRes.json();
+      } catch { /* meta JSON is optional */ }
+
+      return {
+        // Use file's actual last modified time — not the runbook's self-reported time
+        runTimestamp:  fileMeta.lastModifiedDateTime || extra.runTimestamp,
+        fileSize:      fileMeta.size,
+        guestCount:    extra.guestCount,
+        sponsorCount:  extra.sponsorCount,
+        auditCount:    extra.auditCount,
+      };
+    } catch { return null; }
+  }
+
+  // Read and parse GuestData.csv from SPO
+  async function getCacheData() {
+    if (!isEnabled()) throw new Error('SPO integration not enabled');
+    await _ensureExportLibraryId();
+    const token = await Auth.getSpoToken();
+    const csvFile = window.AppConfig?.CACHE_CSV_FILENAME || 'GuestData.csv';
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${_cache.siteId}/lists/${_cache.exportLibraryId}/drive`,
+      { headers: { Authorization:`Bearer ${token}` } }
+    );
+    if (!driveRes.ok) throw new Error(`Could not get drive: ${driveRes.status}`);
+    const drive = await driveRes.json();
+    const fileRes = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(csvFile)}:/content`,
+      { headers: { Authorization:`Bearer ${token}` } }
+    );
+    if (!fileRes.ok) throw new Error(`GuestData.csv not found. Has the data collection runbook run yet?`);
+    const csv = await fileRes.text();
+    return parseCsv(csv);
+  }
+
+  // Simple CSV parser that handles quoted fields
+  function parseCsv(csv) {
+    const lines = csv.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) return [];
+    const headers = splitCsvLine(lines[0]);
+    return lines.slice(1).map(line => {
+      const vals = splitCsvLine(line);
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      return obj;
+    });
+  }
+
+  function splitCsvLine(line) {
+    const result = [];
+    let cur = ''; let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i+1] === '"') { cur += '"'; i++; }
+        else { inQuote = !inQuote; }
+      } else if (ch === ',' && !inQuote) {
+        result.push(cur); cur = '';
+      } else { cur += ch; }
+    }
+    result.push(cur);
+    return result;
+  }
+
+  window.Spo = { loadConfig, saveConfig, isEnabled, loadExclusions, isExcluded, logAction, uploadCsv, getCacheMeta, getCacheData, testConnection, getExportLibrary };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -945,7 +1079,7 @@ window.AccessControl = {
     if (f.search) {
       const q = f.search.toLowerCase();
       const realEmail = extractRealEmail(g.userPrincipalName).toLowerCase();
-      const hay = `${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}\n${realEmail}\n${g.sponsorEmail||''}\n${g.sponsorName||''}`.toLowerCase();
+      const hay = `${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}\n${realEmail}\n${g.sponsorEmail||''}\n${g.sponsorName||''}\n${g.sponsorJobTitle||''}\n${g.sponsorDepartment||''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (f.redemption&&f.redemption!=='any'&&g.redemptionState!==f.redemption) return false;
@@ -967,7 +1101,10 @@ window.AccessControl = {
 (() => {
   const COLS = [
     {key:'displayName',label:'Display name'},{key:'userPrincipalName',label:'UPN'},{key:'mail',label:'Mail'},
-    {key:'companyName',label:'Company'},{key:'sponsorEmail',label:'Sponsor email'},{key:'sponsorName',label:'Sponsor name'},
+    {key:'companyName',label:'Company'},
+    {key:'sponsorEmail',label:'Sponsor email'},{key:'sponsorName',label:'Sponsor name'},
+    {key:'sponsorJobTitle',label:'Sponsor job title'},{key:'sponsorDepartment',label:'Sponsor department'},
+    {key:'sponsorOfficeLocation',label:'Sponsor office'},{key:'auditInviterUPN',label:'Audit inviter UPN'},
     {key:'accountEnabled',label:'Enabled'},{key:'redemptionState',label:'Redemption'},
     {key:'createdDateTime',label:'Created'},{key:'accountAgeDays',label:'Age (days)'},
     {key:'lastSignIn',label:'Last sign-in'},{key:'inactiveDays',label:'Inactive (days)'},
@@ -1024,7 +1161,9 @@ window.AccessControl = {
     guests: [], filtered: [], selected: new Set(),
     sort: { col:'inactiveDays', dir:'desc' },
     deleted: [], cancelToken: null,
-    exclusions: null,   // { emails, objectIds, raw } — null = not loaded / SPO off
+    exclusions: null,
+    dataMode: window.AppConfig?.DEFAULT_DATA_MODE || 'cached',  // 'cached' or 'live'
+    cacheMeta: null,
   };
 
   // ── THEME ────────────────────────────────────────────────────────────────────
@@ -1163,6 +1302,9 @@ window.AccessControl = {
         notice.textContent=`⚠ ${state.exclusions.raw.length} account(s) are on the governance exclusion list and cannot be actioned. They are marked 🔒 in the table.`;
         notice.classList.remove('hidden');
       } else notice.classList.add('hidden');
+      // Fetch cache metadata to show freshness
+      state.cacheMeta = await Spo.getCacheMeta();
+      updateCacheStatusBadge(state.cacheMeta);
       // Re-apply filter to pick up exclusion state
       if (state.guests.length) applyFilter();
     } catch (e) {
@@ -1172,35 +1314,105 @@ window.AccessControl = {
     }
   }
 
+  // ── CACHE STATUS ──────────────────────────────────────────────────────────────
+  function updateCacheStatusBadge(meta) {
+    const badge = document.getElementById('cacheStatusBadge');
+    const toggle = document.getElementById('liveModeToggle');
+    if (!meta) {
+      badge.className = 'spo-status warn'; badge.textContent = 'No cache yet';
+      return;
+    }
+    const mins = Math.round((Date.now() - new Date(meta.runTimestamp)) / 60000);
+    const age  = mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
+    badge.className = 'spo-status ok';
+    badge.textContent = `Cache: ${meta.guestCount} guests · ${age}`;
+    badge.title = `Last refreshed: ${new Date(meta.runTimestamp).toLocaleString()}\nSponsors: ${meta.sponsorCount || 0} · Audit inviters: ${meta.auditCount || 0}`;
+  }
+
   // ── LOAD GUESTS ──────────────────────────────────────────────────────────────
   async function loadGuests() {
-    const btn=document.getElementById('loadGuestsBtn'); btn.disabled=true;
-    const status=document.getElementById('loadStatus');
-    const box=document.getElementById('progressBox');
-    const fill=document.getElementById('progressFill');
-    const count=document.getElementById('progressCount');
-    box.classList.remove('hidden'); fill.style.width='0%'; count.textContent='0';
-    state.cancelToken=new Concurrency.CancelToken();
-    document.getElementById('cancelBtn').onclick=()=>state.cancelToken.cancel();
-    const t0=Date.now();
-    try {
-      const raw=await Graph.listAllGuests((loaded,page)=>{
-        if (state.cancelToken.cancelled) throw new Error('Cancelled');
-        count.textContent=`${loaded} loaded (${page} pages)`;
-        fill.style.width=Math.min(95,page*8)+'%';
-      });
-      const now=new Date();
-      state.guests=raw.map(g=>Guests.enrich(g,now));
-      fill.style.width='100%';
-      const dt=((Date.now()-t0)/1000).toFixed(1);
-      status.textContent=`Loaded ${state.guests.length} guests in ${dt}s`;
-      Log.info(`Loaded ${state.guests.length} guests in ${dt}s`);
-      const hasSignIn=state.guests.filter(g=>g.lastSignIn).length;
-      document.getElementById('ownerNotice').classList.toggle('hidden', !(state.guests.length>0&&hasSignIn/state.guests.length<0.1));
-      document.getElementById('filterRow').classList.remove('hidden');
-      applyFilter();
-    } catch(e) { Log.err('Load failed:',e); toast('Load failed: '+e.message,'err'); }
-    finally { btn.disabled=false; setTimeout(()=>box.classList.add('hidden'),600); }
+    const btn    = document.getElementById('loadGuestsBtn');
+    const status = document.getElementById('loadStatus');
+    const box    = document.getElementById('progressBox');
+    const fill   = document.getElementById('progressFill');
+    const count  = document.getElementById('progressCount');
+    const isLive = document.getElementById('liveModeToggle').checked;
+
+    btn.disabled = true;
+
+    if (!isLive && Spo.isEnabled()) {
+      // ── CACHED MODE ────────────────────────────────────────────────────────
+      status.textContent = 'Loading from SharePoint cache…';
+      box.classList.remove('hidden'); box.style.display='';
+      fill.style.width='30%'; count.textContent='Reading GuestData.csv…';
+      try {
+        const rows = await Spo.getCacheData();
+        fill.style.width='80%'; count.textContent=`Parsing ${rows.length} rows…`;
+        const now = new Date();
+        state.guests = rows.map(r => ({
+          id:                    r.ObjectId,
+          displayName:           r.DisplayName,
+          mail:                  r.Email,
+          userPrincipalName:     r.UPN,
+          companyName:           r.Company,
+          accountEnabled:        r.AccountEnabled === 'Yes',
+          externalUserState:     r.RedemptionState,
+          createdDateTime:       r.CreatedDate,
+          accountAgeDays:        r.AccountAgeDays ? parseInt(r.AccountAgeDays) : null,
+          lastSignIn:            r.LastSignIn ? new Date(r.LastSignIn) : null,
+          inactiveDays:          r.InactiveDays ? parseInt(r.InactiveDays) : null,
+          neverSignedIn:         r.NeverSignedIn === 'Yes',
+          redemptionState:       r.RedemptionState === 'Accepted' ? 'Accepted' :
+                                 r.RedemptionState === 'PendingAcceptance' ? 'PendingAcceptance' : 'Unknown',
+          sponsorEmail:          r.SponsorEmail || r.AuditInviterUPN || '',
+          sponsorName:           r.SponsorName  || '',
+          sponsorJobTitle:       r.SponsorJobTitle       || '',
+          sponsorDepartment:     r.SponsorDepartment     || '',
+          sponsorOfficeLocation: r.SponsorOfficeLocation || '',
+          auditInviterUPN:       r.AuditInviterUPN       || '',
+          excluded:              false,  // will be set by applyFilter
+          _fromCache:            true,
+        }));
+        fill.style.width='100%';
+        status.textContent=`Loaded ${state.guests.length} guests from cache`;
+        Log.info(`Cached mode: loaded ${state.guests.length} guests from GuestData.csv`);
+        document.getElementById('filterRow').classList.remove('hidden');
+        applyFilter();
+      } catch(e) {
+        Log.err('Cache load failed:', e);
+        status.textContent='Cache unavailable — ' + e.message;
+        toast('Cache load failed: ' + e.message + '. Try Live mode.', 'warn');
+      } finally {
+        btn.disabled=false;
+        setTimeout(()=>{ box.classList.add('hidden'); box.style.display='none'; }, 800);
+      }
+
+    } else {
+      // ── LIVE MODE ──────────────────────────────────────────────────────────
+      box.classList.remove('hidden'); box.style.display=''; fill.style.width='0%'; count.textContent='0';
+      state.cancelToken=new Concurrency.CancelToken();
+      document.getElementById('cancelBtn').onclick=()=>state.cancelToken.cancel();
+      const t0=Date.now();
+      try {
+        const raw=await Graph.listAllGuests((loaded,page)=>{
+          if (state.cancelToken.cancelled) throw new Error('Cancelled');
+          count.textContent=`${loaded} loaded (${page} pages)`;
+          fill.style.width=Math.min(95,page*8)+'%';
+        });
+        const now=new Date();
+        state.guests=raw.map(g=>Guests.enrich(g,now));
+        fill.style.width='100%';
+        const dt=((Date.now()-t0)/1000).toFixed(1);
+        status.textContent=`Loaded ${state.guests.length} guests in ${dt}s`;
+        Log.info(`Live mode: loaded ${state.guests.length} guests in ${dt}s`);
+        const hasSignIn=state.guests.filter(g=>g.lastSignIn).length;
+        document.getElementById('ownerNotice').classList.toggle('hidden',
+          !(state.guests.length>0&&hasSignIn/state.guests.length<0.1));
+        document.getElementById('filterRow').classList.remove('hidden');
+        applyFilter();
+      } catch(e) { Log.err('Live load failed:',e); toast('Load failed: '+e.message,'err'); }
+      finally { btn.disabled=false; setTimeout(()=>{ box.classList.add('hidden'); box.style.display='none'; },600); }
+    }
   }
 
   // ── FILTER ───────────────────────────────────────────────────────────────────
@@ -1259,8 +1471,17 @@ window.AccessControl = {
     const hint=document.getElementById('tableHint');
     const bar=document.getElementById('actionBar');
     const tbody=document.querySelector('#guestsTable tbody');
-    if (!state.guests.length) { wrap.classList.add('hidden'); hint.classList.add('hidden'); bar.classList.add('hidden'); return; }
+    if (!state.guests.length) { wrap.classList.add('hidden'); hint.classList.add('hidden'); bar.classList.add('hidden'); document.getElementById('summaryBar').classList.add('hidden'); return; }
     wrap.classList.remove('hidden'); hint.classList.remove('hidden'); bar.classList.remove('hidden');
+    document.getElementById('summaryBar').classList.remove('hidden');
+
+    // Update summary counts
+    const excludedCount = state.guests.filter(g=>g.excluded).length;
+    const neverSignedIn = state.guests.filter(g=>g.neverSignedIn).length;
+    document.getElementById('countTotal').textContent      = state.guests.length.toLocaleString();
+    document.getElementById('countFiltered').textContent   = state.filtered.length.toLocaleString();
+    document.getElementById('countExcluded').textContent   = excludedCount.toLocaleString();
+    document.getElementById('countNeverSignedIn').textContent = neverSignedIn.toLocaleString();
     const rows=sortGuests(state.filtered).slice(0,1000);
     hint.textContent=`${state.filtered.length} match${state.filtered.length===1?'':'es'}`+(state.filtered.length>rows.length?` (showing first ${rows.length})`:'');
     tbody.innerHTML=rows.map(g=>{
@@ -1271,7 +1492,13 @@ window.AccessControl = {
         <td><strong>${escHtml(g.displayName||'(no name)')}</strong><br><span class="muted small">${escHtml(g.userPrincipalName||'')}</span></td>
         <td>${escHtml(realEmail)}</td>
         <td>${escHtml(g.companyName||'')}</td>
-        <td>${g.sponsorEmail?`${escHtml(g.sponsorName||g.sponsorEmail)}<br><span class="muted small">${escHtml(g.sponsorEmail)}</span>`:'<span class="muted small">—</span>'}</td>
+        <td>${g.sponsorEmail ? `
+          <span title="${escAttr((g.sponsorJobTitle?g.sponsorJobTitle+' · ':'')+( g.sponsorDepartment||''))}">
+            ${escHtml(g.sponsorName||g.sponsorEmail)}
+          </span>
+          <br><span class="muted small">${escHtml(g.sponsorEmail)}</span>
+          ${g.sponsorJobTitle?`<br><span class="muted small">${escHtml(g.sponsorJobTitle)}${g.sponsorDepartment?' · '+escHtml(g.sponsorDepartment):''}</span>`:''}
+        ` : '<span class="muted small">—</span>'}</td>
         <td>${escHtml(g.redemptionState)}</td>
         <td>${g.accountEnabled?'Yes':'<span class="muted">No</span>'}</td>
         <td>${escHtml(Guests.fmtDate(g.createdDateTime))}<br><span class="muted small">${g.accountAgeDays!=null?g.accountAgeDays+' days':''}</span></td>
@@ -1286,6 +1513,7 @@ window.AccessControl = {
 
   function updateSelCount() {
     document.getElementById('selCount').textContent=String(state.selected.size);
+    document.getElementById('countSelected').textContent=state.selected.size.toLocaleString();
     const sel=state.selected.size;
     ['disableBtn','enableBtn','deleteBtn'].forEach(id=>document.getElementById(id).disabled=sel===0);
     ['exportXlsxBtn','exportCsvBtn'].forEach(id=>document.getElementById(id).disabled=state.filtered.length===0);
@@ -1604,6 +1832,16 @@ window.AccessControl = {
     document.getElementById('spoSaveBtn').addEventListener('click', onSpoSave);
     document.getElementById('saveClientIdBtn').addEventListener('click', onSaveClientId);
     document.getElementById('fetchSponsorsBtn').addEventListener('click', fetchSponsors);
+
+    // Data mode toggle
+    const toggle = document.getElementById('liveModeToggle');
+    const defaultLive = (window.AppConfig?.DEFAULT_DATA_MODE || 'cached') === 'live';
+    toggle.checked = defaultLive;
+    toggle.addEventListener('change', () => {
+      const isLive = toggle.checked;
+      document.getElementById('loadGuestsBtn').textContent = isLive ? 'Load guests (live)' : 'Load guests';
+      if (!isLive) updateCacheStatusBadge(state.cacheMeta);
+    });
 
     updateSpoBadge();
 
