@@ -208,7 +208,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
           <option value="signed">Has signed in</option>
         </select>
         <label class="checkbox"><input type="checkbox" id="hideExcluded" checked/> Hide excluded</label>
-        <button id="fetchSponsorsBtn" class="ghost-btn" title="Fetch the internal sponsor for each guest (one Graph call per guest — may be slow for large tenants)">+ Fetch sponsors</button>
+        <button id="fetchSponsorsBtn" class="ghost-btn" title="Fetch sponsors for currently filtered guests only. Apply filters first to narrow the list before fetching.">+ Fetch sponsors</button>
       </div>
 
       <p id="ownerNotice" class="notice notice-info hidden">
@@ -429,7 +429,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.0.5',   // ← bump this every time you deploy a new version
+  VERSION: '1.0.6',   // ← bump this every time you deploy a new version
 
   // ── BRANDING ─────────────────────────────────────────────────────────────────
   APP_NAME:    'Guest Manager',
@@ -1383,27 +1383,40 @@ window.AccessControl = {
   async function fetchSponsors() {
     if (!state.guests.length) { toast('Load guests first','warn'); return; }
     const btn = document.getElementById('fetchSponsorsBtn');
-    btn.disabled = true; btn.textContent = 'Fetching sponsors…';
+
+    // Only fetch for currently filtered/visible guests — not all 2217
+    const targets = state.filtered.length < state.guests.length
+      ? state.filtered
+      : state.guests;
+
+    btn.disabled = true;
+    btn.textContent = `Fetching sponsors… 0/${targets.length}`;
     let done = 0;
-    const total = state.guests.length;
-    await Concurrency.pmap(state.guests, async (g) => {
+
+    await Concurrency.pmap(targets, async (g) => {
       try {
+        // /invitedBy returns a directoryObject — need to cast to user to get mail
         const ref = await Graph.call(
-          `https://graph.microsoft.com/v1.0/users/${g.id}/invitedBy?$select=mail,displayName`,
-          { write: false }
+          `https://graph.microsoft.com/v1.0/users/${g.id}/invitedBy/microsoft.graph.user?$select=mail,displayName,userPrincipalName`
         );
         g.sponsorEmail = ref?.mail || ref?.userPrincipalName || '';
         g.sponsorName  = ref?.displayName || '';
-      } catch { g.sponsorEmail = ''; g.sponsorName = ''; }
-      finally {
+      } catch {
+        // invitedBy may not exist for all guests — not an error
+        g.sponsorEmail = '';
+        g.sponsorName  = '';
+      } finally {
         done++;
-        btn.textContent = `Fetching sponsors… ${done}/${total}`;
+        if (done % 10 === 0 || done === targets.length) {
+          btn.textContent = `Fetching sponsors… ${done}/${targets.length}`;
+        }
       }
     }, { concurrency: 5 });
+
     btn.disabled = false;
-    btn.textContent = '✓ Sponsors loaded';
+    btn.textContent = `✓ Sponsors loaded (${targets.length})`;
     applyFilter();
-    toast(`Sponsors loaded for ${total} guests`, 'ok');
+    toast(`Sponsors loaded for ${targets.length} guest(s)`, 'ok');
   }
 
   function onDisable() { return bulkAction('Disable', g=>Graph.disableUser(g.id)); }
