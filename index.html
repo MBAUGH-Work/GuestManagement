@@ -429,7 +429,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.0.4',   // ← bump this every time you deploy a new version
+  VERSION: '1.0.5',   // ← bump this every time you deploy a new version
 
   // ── BRANDING ─────────────────────────────────────────────────────────────────
   APP_NAME:    'Guest Manager',
@@ -1146,8 +1146,9 @@ window.AccessControl = {
     } catch (e) { Log.err('Sign-in failed:', e); toast('Sign-in failed: '+e.message,'err'); }
   }
   async function onSignOut() {
-    await Auth.signOut(); state.guests=[]; state.filtered=[]; state.selected.clear(); state.exclusions=null;
-    renderTable(); await refreshAuthUI(); updateSpoBadge();
+    await Auth.signOut();
+    // Reload the page to fully reset all state and show clean sign-in screen
+    window.location.reload();
   }
 
   // ── SPO EXCLUSIONS ───────────────────────────────────────────────────────────
