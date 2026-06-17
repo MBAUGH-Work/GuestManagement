@@ -197,6 +197,9 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 
       <div id="filterRow" class="row hidden">
         <input type="search" id="search" placeholder="Filter name, UPN, mail or company…" />
+        <select id="domain">
+          <option value="any">Any domain</option>
+        </select>
         <label>Inactive &gt; <input type="number" id="minInactive" min="0" step="30" value="90" style="width:80px"/> days</label>
         <label>Min age <input type="number" id="minAge" min="0" step="30" value="0" style="width:80px"/> days</label>
         <select id="redemption">
@@ -253,6 +256,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
               <th><input type="checkbox" id="selectAll" /></th>
               <th data-sort="displayName">Display name</th>
               <th data-sort="mail">Email</th>
+              <th data-sort="domain">Domain</th>
               <th data-sort="companyName">Company</th>
               <th data-sort="sponsorEmail">Sponsor</th>
               <th data-sort="redemptionState">Redemption</th>
@@ -1058,8 +1062,9 @@ window.AccessControl = {
     const last = lastSignInDate(user);
     const created = user.createdDateTime ? new Date(user.createdDateTime) : null;
     const accountAgeDays = created ? daysBetween(created, now) : null;
+    const realEmail = user.mail || extractRealEmail(user.userPrincipalName) || '';
     return { ...user, lastSignIn:last, inactiveDays: last ? daysBetween(last,now) : accountAgeDays,
-      accountAgeDays, neverSignedIn:!last,
+      accountAgeDays, neverSignedIn:!last, domain: extractDomain(realEmail),
       redemptionState: user.externalUserState==='PendingAcceptance' ? 'PendingAcceptance' : user.externalUserState==='Accepted' ? 'Accepted' : 'Unknown' };
   }
   function extractRealEmail(upn) {
@@ -1074,14 +1079,21 @@ window.AccessControl = {
     if (lastUnderscore === -1) return prefix;
     return prefix.substring(0, lastUnderscore) + '@' + prefix.substring(lastUnderscore + 1);
   }
+  function extractDomain(email) {
+    if (!email) return '';
+    const at = email.lastIndexOf('@');
+    if (at === -1) return '';
+    return email.substring(at + 1).toLowerCase();
+  }
 
   function passesFilter(g, f) {
     if (f.search) {
       const q = f.search.toLowerCase();
       const realEmail = extractRealEmail(g.userPrincipalName).toLowerCase();
-      const hay = `${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.companyName||''}\n${realEmail}\n${g.sponsorEmail||''}\n${g.sponsorName||''}\n${g.sponsorJobTitle||''}\n${g.sponsorDepartment||''}`.toLowerCase();
+      const hay = `${g.displayName||''}\n${g.userPrincipalName||''}\n${g.mail||''}\n${g.domain||''}\n${g.companyName||''}\n${realEmail}\n${g.sponsorEmail||''}\n${g.sponsorName||''}\n${g.sponsorJobTitle||''}\n${g.sponsorDepartment||''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
+    if (f.domain && f.domain!=='any' && g.domain!==f.domain) return false;
     if (f.redemption&&f.redemption!=='any'&&g.redemptionState!==f.redemption) return false;
     if (f.enabled==='enabled'&&!g.accountEnabled) return false;
     if (f.enabled==='disabled'&&g.accountEnabled) return false;
@@ -1092,7 +1104,7 @@ window.AccessControl = {
     return true;
   }
   function fmtDate(d) { if(!d) return ''; const dt=d instanceof Date?d:new Date(d); if(isNaN(dt)) return ''; return dt.toISOString().substring(0,10); }
-  window.Guests = { lastSignInDate, daysBetween, enrich, passesFilter, fmtDate, extractRealEmail };
+  window.Guests = { lastSignInDate, daysBetween, enrich, passesFilter, fmtDate, extractRealEmail, extractDomain };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -1101,6 +1113,7 @@ window.AccessControl = {
 (() => {
   const COLS = [
     {key:'displayName',label:'Display name'},{key:'userPrincipalName',label:'UPN'},{key:'mail',label:'Mail'},
+    {key:'domain',label:'Domain'},
     {key:'companyName',label:'Company'},
     {key:'sponsorEmail',label:'Sponsor email'},{key:'sponsorName',label:'Sponsor name'},
     {key:'sponsorJobTitle',label:'Sponsor job title'},{key:'sponsorDepartment',label:'Sponsor department'},
@@ -1353,6 +1366,7 @@ window.AccessControl = {
           id:                    r.ObjectId,
           displayName:           r.DisplayName,
           mail:                  r.Email,
+          domain:                r.EmailDomain || Guests.extractDomain(r.Email || Guests.extractRealEmail(r.UPN)),
           userPrincipalName:     r.UPN,
           companyName:           r.Company,
           accountEnabled:        r.AccountEnabled === 'Yes',
@@ -1377,6 +1391,7 @@ window.AccessControl = {
         status.textContent=`Loaded ${state.guests.length} guests from cache`;
         Log.info(`Cached mode: loaded ${state.guests.length} guests from GuestData.csv`);
         document.getElementById('filterRow').classList.remove('hidden');
+        populateDomainFilter();
         applyFilter();
       } catch(e) {
         Log.err('Cache load failed:', e);
@@ -1409,6 +1424,7 @@ window.AccessControl = {
         document.getElementById('ownerNotice').classList.toggle('hidden',
           !(state.guests.length>0&&hasSignIn/state.guests.length<0.1));
         document.getElementById('filterRow').classList.remove('hidden');
+        populateDomainFilter();
         applyFilter();
       } catch(e) { Log.err('Live load failed:',e); toast('Load failed: '+e.message,'err'); }
       finally { btn.disabled=false; setTimeout(()=>{ box.classList.add('hidden'); box.style.display='none'; },600); }
@@ -1419,6 +1435,7 @@ window.AccessControl = {
   function readFilter() {
     return {
       search: document.getElementById('search').value.trim(),
+      domain: document.getElementById('domain').value,
       minInactive: parseInt(document.getElementById('minInactive').value,10)||0,
       minAge: parseInt(document.getElementById('minAge').value,10)||0,
       redemption: document.getElementById('redemption').value,
@@ -1426,6 +1443,15 @@ window.AccessControl = {
       neverSignedIn: document.getElementById('neverSignedIn').value,
       hideExcluded: document.getElementById('hideExcluded').checked,
     };
+  }
+  function populateDomainFilter() {
+    const sel = document.getElementById('domain');
+    const prev = sel.value;
+    const domains = [...new Set(state.guests.map(g=>g.domain).filter(Boolean))].sort();
+    sel.innerHTML = '<option value="any">Any domain</option>' +
+      domains.map(d=>`<option value="${escAttr(d)}">${escHtml(d)} (${state.guests.filter(g=>g.domain===d).length})</option>`).join('');
+    // Preserve the previously selected domain if it's still present in the new list
+    if (domains.includes(prev)) sel.value = prev;
   }
   function applyFilter() {
     const f=readFilter();
@@ -1445,6 +1471,7 @@ window.AccessControl = {
     const k=g=>{ switch(col){
       case 'displayName': return (g.displayName||'').toLowerCase();
       case 'mail': return (g.mail||Guests.extractRealEmail(g.userPrincipalName)||'').toLowerCase();
+      case 'domain': return (g.domain||'').toLowerCase();
       case 'companyName': return (g.companyName||'').toLowerCase();
       case 'sponsorEmail': return (g.sponsorEmail||'').toLowerCase();
       case 'userPrincipalName': return (g.userPrincipalName||'').toLowerCase();
@@ -1491,6 +1518,7 @@ window.AccessControl = {
         <td><input type="checkbox" data-act="sel" ${state.selected.has(g.id)?'checked':''} ${g.excluded?'disabled':''}/></td>
         <td><strong>${escHtml(g.displayName||'(no name)')}</strong><br><span class="muted small">${escHtml(g.userPrincipalName||'')}</span></td>
         <td>${escHtml(realEmail)}</td>
+        <td><span class="muted small">${escHtml(g.domain||'')}</span></td>
         <td>${escHtml(g.companyName||'')}</td>
         <td>${g.sponsorEmail ? `
           <span title="${escAttr((g.sponsorJobTitle?g.sponsorJobTitle+' · ':'')+( g.sponsorDepartment||''))}">
