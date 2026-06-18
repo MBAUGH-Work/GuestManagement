@@ -38,7 +38,7 @@ code{background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-ra
 .tabs{display:flex;gap:4px;padding:0 24px;background:var(--card);border-bottom:1px solid var(--border)}
 .tab{background:none;border:none;padding:12px 18px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
 .tab:hover{color:var(--text)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-main{padding:24px;max-width:1400px;margin:0 auto}
+main{padding:24px;max-width:1900px;margin:0 auto}
 .tab-panel{display:none}.tab-panel.active{display:block}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);margin-bottom:18px}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:12px 0}
@@ -218,7 +218,8 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
           <option value="signed">Has signed in</option>
         </select>
         <label class="checkbox"><input type="checkbox" id="hideExcluded" checked/> Hide excluded</label>
-        <button id="fetchSponsorsBtn" class="ghost-btn" title="Fetch sponsors for currently filtered guests only. Apply filters first to narrow the list before fetching.">+ Fetch sponsors</button>
+        <button id="fetchSponsorsCsvBtn" class="ghost-btn" title="Load sponsor data from the latest GuestData.csv export — resolved via Graph invitedBy + Entra/Exchange audit logs by the runbook, much more complete than the live Graph-only lookup. Requires SharePoint integration to be enabled and a recent runbook run.">+ Load sponsors from CSV</button>
+        <button id="fetchSponsorsBtn" class="ghost-btn" title="Fetch sponsors for currently filtered guests only, using Graph's invitedBy relationship directly. Often finds few/no matches for tenants that bulk-invite guests — try 'Load sponsors from CSV' first if available.">+ Fetch sponsors (live, Graph only)</button>
       </div>
 
       <p id="ownerNotice" class="notice notice-info hidden">
@@ -463,7 +464,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.1.1',   // ← bump this every time you deploy a new version
+  VERSION: '1.2.0',   // ← bump this every time you deploy a new version
 
   // ── CACHE SETTINGS ────────────────────────────────────────────────────────────
   // Name of the CSV file written by Invoke-GuestDataCollection.ps1
@@ -1391,7 +1392,6 @@ window.AccessControl = {
         status.textContent=`Loaded ${state.guests.length} guests from cache`;
         Log.info(`Cached mode: loaded ${state.guests.length} guests from GuestData.csv`);
         document.getElementById('filterRow').classList.remove('hidden');
-        populateDomainFilter();
         applyFilter();
       } catch(e) {
         Log.err('Cache load failed:', e);
@@ -1424,7 +1424,6 @@ window.AccessControl = {
         document.getElementById('ownerNotice').classList.toggle('hidden',
           !(state.guests.length>0&&hasSignIn/state.guests.length<0.1));
         document.getElementById('filterRow').classList.remove('hidden');
-        populateDomainFilter();
         applyFilter();
       } catch(e) { Log.err('Live load failed:',e); toast('Load failed: '+e.message,'err'); }
       finally { btn.disabled=false; setTimeout(()=>{ box.classList.add('hidden'); box.style.display='none'; },600); }
@@ -1444,12 +1443,27 @@ window.AccessControl = {
       hideExcluded: document.getElementById('hideExcluded').checked,
     };
   }
-  function populateDomainFilter() {
+  function populateDomainFilter(currentFilter) {
     const sel = document.getElementById('domain');
     const prev = sel.value;
     const domains = [...new Set(state.guests.map(g=>g.domain).filter(Boolean))].sort();
+
+    // Count "how many guests would match if this domain were selected, given
+    // every OTHER currently active filter" — not a raw total across all
+    // loaded guests. Reuses the exact same passesFilter() logic as the table
+    // itself, with domain forced to 'any' so it's excluded from the check,
+    // then the specific domain is tested separately per option.
+    const baseFilter = currentFilter ? { ...currentFilter, domain: 'any' } : { domain: 'any' };
+    const countsByDomain = {};
+    for (const d of domains) countsByDomain[d] = 0;
+    for (const g of state.guests) {
+      if (baseFilter.hideExcluded && g.excluded) continue;
+      if (!Guests.passesFilter(g, baseFilter)) continue;
+      if (g.domain && countsByDomain.hasOwnProperty(g.domain)) countsByDomain[g.domain]++;
+    }
+
     sel.innerHTML = '<option value="any">Any domain</option>' +
-      domains.map(d=>`<option value="${escAttr(d)}">${escHtml(d)} (${state.guests.filter(g=>g.domain===d).length})</option>`).join('');
+      domains.map(d=>`<option value="${escAttr(d)}">${escHtml(d)} (${countsByDomain[d]})</option>`).join('');
     // Preserve the previously selected domain if it's still present in the new list
     if (domains.includes(prev)) sel.value = prev;
   }
@@ -1462,6 +1476,7 @@ window.AccessControl = {
       return Guests.passesFilter(g,f);
     });
     for (const id of [...state.selected]) { if (!state.filtered.some(g=>g.id===id)) state.selected.delete(id); }
+    populateDomainFilter(f);
     renderTable();
   }
 
@@ -1648,6 +1663,7 @@ window.AccessControl = {
     btn.disabled = true;
     btn.textContent = `Fetching sponsors… 0/${targets.length}`;
     let done = 0;
+    let found = 0;
 
     await Concurrency.pmap(targets, async (g) => {
       try {
@@ -1657,6 +1673,7 @@ window.AccessControl = {
         );
         g.sponsorEmail = ref?.mail || ref?.userPrincipalName || '';
         g.sponsorName  = ref?.displayName || '';
+        if (g.sponsorEmail) found++;
       } catch {
         // invitedBy may not exist for all guests — not an error
         g.sponsorEmail = '';
@@ -1670,9 +1687,60 @@ window.AccessControl = {
     }, { concurrency: 5 });
 
     btn.disabled = false;
-    btn.textContent = `✓ Sponsors loaded (${targets.length})`;
+    // NOTE: Graph's invitedBy relationship is empty for most guests in tenants
+    // that bulk-invite via PowerShell/script rather than the Entra portal's
+    // one-by-one "Invite guest" flow — found is very likely to be much lower
+    // than targets.length, and that's expected, not a sign anything failed.
+    // Showing the actual match count here (not attempts made) avoids the
+    // previous misleading "✓ Sponsors loaded (1347)" when most of those 1347
+    // attempts may have found nothing.
+    btn.textContent = `✓ Sponsors: ${found}/${targets.length} found`;
     applyFilter();
-    toast(`Sponsors loaded for ${targets.length} guest(s)`, 'ok');
+    if (found === 0) {
+      toast(`No sponsors found via Graph invitedBy for ${targets.length} guest(s) — try "Load sponsors from CSV" instead if a recent GuestData.csv export exists`, 'warn');
+    } else {
+      toast(`Found sponsors for ${found} of ${targets.length} guest(s)`, 'ok');
+    }
+  }
+
+  // Loads the richer, PowerShell-resolved sponsor data (Graph invitedBy +
+  // Entra directory audit log + Exchange unified audit log, the latter two
+  // of which this client-side app has no way to query itself — Search-
+  // UnifiedAuditLog requires the Exchange Online PowerShell module) from
+  // the latest GuestData.csv export, merging it onto whatever guests are
+  // currently loaded (live or cached mode) by matching ObjectId. Works
+  // alongside live mode — it does NOT require switching out of live mode,
+  // since it only reads sponsor columns from the CSV, not guest records.
+  async function fetchSponsorsFromCsv() {
+    if (!state.guests.length) { toast('Load guests first','warn'); return; }
+    if (!Spo.isEnabled()) { toast('SharePoint integration is not enabled — cannot read GuestData.csv','warn'); return; }
+    const btn = document.getElementById('fetchSponsorsCsvBtn');
+    btn.disabled = true;
+    btn.textContent = 'Loading sponsors from CSV…';
+    try {
+      const rows = await Spo.getCacheData();
+      const byObjectId = new Map(rows.map(r => [r.ObjectId, r]));
+      let found = 0;
+      for (const g of state.guests) {
+        const row = byObjectId.get(g.id);
+        if (row && row.SponsorEmail) {
+          g.sponsorEmail      = row.SponsorEmail || '';
+          g.sponsorName       = row.SponsorName || '';
+          g.sponsorJobTitle   = row.SponsorJobTitle || '';
+          g.sponsorDepartment = row.SponsorDepartment || '';
+          found++;
+        }
+      }
+      btn.textContent = `✓ Sponsors: ${found}/${state.guests.length} found`;
+      applyFilter();
+      toast(`Loaded sponsor data for ${found} of ${state.guests.length} guest(s) from GuestData.csv`, found > 0 ? 'ok' : 'warn');
+    } catch (e) {
+      Log.err('Failed to load sponsors from CSV:', e);
+      toast('Failed to load GuestData.csv: ' + e.message, 'err');
+      btn.textContent = '+ Load sponsors from CSV';
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   function onDisable() { return bulkAction('Disable', g=>Graph.disableUser(g.id)); }
@@ -1859,6 +1927,7 @@ window.AccessControl = {
     document.getElementById('verboseLog').addEventListener('change', e=>Log.setVerbose(e.target.checked));
     document.getElementById('spoSaveBtn').addEventListener('click', onSpoSave);
     document.getElementById('saveClientIdBtn').addEventListener('click', onSaveClientId);
+    document.getElementById('fetchSponsorsCsvBtn').addEventListener('click', fetchSponsorsFromCsv);
     document.getElementById('fetchSponsorsBtn').addEventListener('click', fetchSponsors);
 
     // Data mode toggle
