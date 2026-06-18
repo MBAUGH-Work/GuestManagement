@@ -463,7 +463,7 @@ input[type="search"]{min-width:240px;flex:1;max-width:400px}
 window.AppConfig = {
 
   // ── VERSION ───────────────────────────────────────────────────────────────────
-  VERSION: '1.1.0',   // ← bump this every time you deploy a new version
+  VERSION: '1.1.1',   // ← bump this every time you deploy a new version
 
   // ── CACHE SETTINGS ────────────────────────────────────────────────────────────
   // Name of the CSV file written by Invoke-GuestDataCollection.ps1
@@ -1842,7 +1842,7 @@ window.AccessControl = {
     document.getElementById('signOutBtn').addEventListener('click', onSignOut);
     document.getElementById('loadGuestsBtn').addEventListener('click', loadGuests);
     document.getElementById('loadDeletedBtn').addEventListener('click', loadDeleted);
-    ['search','minInactive','minAge','redemption','enabled','neverSignedIn','hideExcluded'].forEach(id=>{
+    ['search','domain','minInactive','minAge','redemption','enabled','neverSignedIn','hideExcluded'].forEach(id=>{
       document.getElementById(id).addEventListener('input', applyFilter);
       document.getElementById(id).addEventListener('change', applyFilter);
     });
